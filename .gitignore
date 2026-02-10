@@ -1,0 +1,50 @@
+# OS
+.DS_Store
+.DS_Store?
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+.env/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# IDE / Editor
+.idea/
+.vscode/
+*.sublime-*
+
+# Env and secrets
+.env
+.env.local
+*.key
+*.pem
+
+# Logs and temp
+*.log
+*.tmp
+.cache/
+
+# Optional: uncomment if you want to exclude large datasets or outputs
+# project/detection/*.txt
+detection/dataset/
+detection/images/
+detection/labels/
+detection/yolov11_face/weights/
+detection/data.yaml
