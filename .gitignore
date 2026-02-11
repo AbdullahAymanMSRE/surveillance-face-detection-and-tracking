@@ -40,11 +40,3 @@ build/
 *.log
 *.tmp
 .cache/
-
-# Optional: uncomment if you want to exclude large datasets or outputs
-# project/detection/*.txt
-detection/dataset/
-detection/images/
-detection/labels/
-detection/yolov11_face/weights/
-detection/data.yaml

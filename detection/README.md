@@ -27,16 +27,38 @@ detection/
 
 ## Dataset
 
-The pipeline expects a **face detection dataset** with:
+By default this module is configured to use the **WIDER FACE YOLO dataset**:
+
+- **Dataset**: [WIDER FACE for YOLO training](https://www.kaggle.com/datasets/lylmsc/wider-face-for-yolo-training)
+- **Task**: single-class face detection (`face`)
+- **Format**: YOLO text labels (`class x_center y_center width height`) with normalized coordinates
+
+### Recommended layout
+
+After downloading from Kaggle, extract the dataset under `detection/dataset/` so you end up with a standard YOLO layout, for example:
+
+- `dataset/images/train/`
+- `dataset/images/val/`
+- `dataset/images/test/` (optional)
+- `dataset/labels/train/`
+- `dataset/labels/val/`
+- `dataset/labels/test/` (optional)
+
+Make sure `data.yaml` points to these folders and defines a single class:
+
+- `nc: 1`
+- `names: ["face"]`
+
+### Using CSV-based datasets (optional)
+
+You can still use CSV-based face-detection datasets (e.g. [Kaggle Face Detection](https://www.kaggle.com/datasets/adilshamim8/face-detection)) by arranging them as:
 
 - `dataset/train/train/` – training images + `_annotations.csv`
 - `dataset/valid/valid/` – validation images + `_annotations.csv`
 - `dataset/test/test/` – test images + `_annotations.csv`
 
-CSV format: `filename, width, height, class, xmin, ymin, xmax, ymax`  
-Compatible with datasets such as [Kaggle Face Detection](https://www.kaggle.com/datasets/adilshamim8/face-detection).
-
-`main.py` converts these CSVs to YOLO format (normalized `class x_center y_center width height`) and writes `data.yaml`.
+with CSV format: `filename, width, height, class, xmin, ymin, xmax, ymax`.  
+`main.py` can be adapted to convert these CSVs to YOLO format (normalized `class x_center y_center width height`) and to write `data.yaml`.
 
 ## Requirements
 
