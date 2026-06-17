@@ -1,2 +1,7 @@
-.venv
-output
+slurm-*.out
+slurm-*.err
+runs/
+lightning_logs/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
