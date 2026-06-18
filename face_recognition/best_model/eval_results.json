@@ -1,0 +1,13 @@
+{
+  "checkpoint": "/home/aelmersa/vggface2_face_recognition/face_recognition/runs/dino_20260617_175717/arcface_finetuned.pt",
+  "num_val_images": 26460,
+  "num_identities": 480,
+  "rank1_accuracy": 0.8560846560846561,
+  "verification": {
+    "auc": 0.9143371899999999,
+    "best_accuracy": 0.910625,
+    "best_threshold": 0.155,
+    "num_genuine_pairs": 20000,
+    "num_impostor_pairs": 20000
+  }
+}

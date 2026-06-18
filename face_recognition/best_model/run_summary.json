@@ -1,0 +1,11 @@
+{
+  "backbone": "dino_vitb16",
+  "backbone_dim": 768,
+  "embed_dim": 256,
+  "arcface_only": true,
+  "init_checkpoint": "/home/aelmersa/vggface2_face_recognition/face_recognition/runs/dino_20260616_203019/arcface_finetuned.pt",
+  "arcface_epochs": 20,
+  "arcface_lr": 5e-05,
+  "arcface_unfreeze_blocks": 3,
+  "num_train_images": 149938
+}
