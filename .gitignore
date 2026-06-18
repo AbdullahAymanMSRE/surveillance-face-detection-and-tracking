@@ -5,3 +5,13 @@ lightning_logs/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+
+# Runtime face database — captured face images, embeddings, metadata.
+# Per-machine runtime data (and personal biometric data), not source.
+face_recognition/face_db/
+
+# Optional enrollment galleries
+face_recognition/dino_vit/gallery/
+
+# Scratch
+*.zip
