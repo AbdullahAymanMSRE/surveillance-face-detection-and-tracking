@@ -115,8 +115,12 @@ FastAPI                                               ▼
                  { existingPerson: {id, name, thumbnailUrl}, score }
             → frontend shows: "This looks like <name> (score 0.41). Same person?"
                  [Cancel]  [Add photo to <name> instead]  [No, enroll as new person]
-       no strong match (or name matches an existing person of that face):
-            → proceed
+       no strong match:
+            → proceed to create a brand-new Person
+       best match score >= threshold AND matched person's name == submitted name:
+            → treat as re-enrolling the same known person: add this embedding to
+              the existing Person (via the same path as "add photo to existing
+              person" below) instead of creating a duplicate Person row
   6. Insert Person{name} + FaceEmbedding{personId, vector} into SQLite
   7. Save crop to data/thumbnails/<personId>.jpg
   8. Return 201 {id, name, thumbnailUrl}
@@ -131,6 +135,8 @@ Follow-up actions from the conflict dialog:
   this embedding to the existing person, no new `Person` row.
 - **"Enroll as new person anyway"** → re-POST `/enroll` with `force=true`,
   skipping the duplicate check (handles legitimate look-alikes / false positives).
+  `force=true` always creates a brand-new `Person`, even if the face would
+  otherwise match (by name or by similarity).
 
 Single snapshot per enrollment for this slice (not the old 10-shot gallery
 flow) — simplest path to prove the chain works end-to-end. Multi-shot
