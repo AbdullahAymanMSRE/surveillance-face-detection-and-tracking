@@ -51,6 +51,7 @@ api/
   main.py                       # CREATE: FastAPI app, CORS, startup, /health
   db.py                         # CREATE: engine/session management
   models.py                     # CREATE: Person, FaceEmbedding tables
+  serializers.py                # CREATE: shared Person -> dict response shape
   ml.py                         # CREATE: detection+alignment+embedding wrapper
   matching.py                   # CREATE: cosine-similarity duplicate matching
   routers/
@@ -634,6 +635,7 @@ git commit -m "Add cosine-similarity duplicate-face matching"
 ### Task 4: `POST /enroll` with duplicate detection
 
 **Files:**
+- Create: `api/serializers.py`
 - Modify: `api/routers/enroll.py`
 - Test: `tests/api/test_enroll.py`
 
@@ -641,10 +643,12 @@ git commit -m "Add cosine-similarity duplicate-face matching"
 - Consumes: `api.ml.decode_image`, `api.ml.detect_and_embed`, `api.ml.NoFaceDetected`
   (Task 2); `api.matching.find_best_match` (Task 3); `api.db.get_session`,
   `api.db.get_thumbnails_dir` (Task 1); `api.models.Person`, `api.models.FaceEmbedding`.
-- Produces: `POST /enroll` accepting form fields `name` (str), `image` (file),
-  `force` (bool, default false). Response shape `{id, name, thumbnailUrl}`.
-  Helper functions `_person_response`, `_save_thumbnail`, `_create_person`,
-  `_add_embedding` (module-private, reused by Task 5).
+- Produces: `api.serializers.person_response(person: Person) -> dict` (the
+  shared `{id, name, thumbnailUrl}` response shape, also used by Task 6's
+  `GET /people`). `POST /enroll` accepting form fields `name` (str), `image`
+  (file), `force` (bool, default false). Helper functions `_decode_and_embed`,
+  `_save_thumbnail`, `_create_person`, `_add_embedding` (module-private in
+  `enroll.py`, reused by Task 5 within the same file).
 
 - [ ] **Step 1: Write the failing tests `tests/api/test_enroll.py`**
 
@@ -737,7 +741,21 @@ below).
 > unblock this — if executing tasks out of order, do Task 6 before finishing
 > Task 4's test run.
 
-- [ ] **Step 3: Write `api/routers/enroll.py`**
+- [ ] **Step 3: Write `api/serializers.py`**
+
+```python
+from .models import Person
+
+
+def person_response(person: Person) -> dict:
+    return {
+        "id": person.id,
+        "name": person.name,
+        "thumbnailUrl": f"/people/{person.id}/thumbnail",
+    }
+```
+
+- [ ] **Step 4: Write `api/routers/enroll.py`**
 
 ```python
 import cv2
@@ -748,16 +766,22 @@ from .. import ml
 from ..db import get_session, get_thumbnails_dir
 from ..matching import find_best_match
 from ..models import FaceEmbedding, Person
+from ..serializers import person_response
 
 router = APIRouter()
 
 
-def _person_response(person: Person) -> dict:
-    return {
-        "id": person.id,
-        "name": person.name,
-        "thumbnailUrl": f"/people/{person.id}/thumbnail",
-    }
+def _decode_and_embed(image: UploadFile):
+    """Decode an uploaded image and run detect+align+embed.
+
+    Returns (vector_bytes, crop_bgr, sharpness). Raises HTTPException(422) if
+    no face is found — shared by /enroll and /people/{id}/embeddings."""
+    image_bytes = image.file.read()
+    frame = ml.decode_image(image_bytes)
+    try:
+        return ml.detect_and_embed(frame)
+    except ml.NoFaceDetected:
+        raise HTTPException(422, detail="No face detected")
 
 
 def _save_thumbnail(person_id: int, crop_bgr) -> None:
@@ -799,12 +823,7 @@ def enroll(
     force: bool = Form(False),
     session: Session = Depends(get_session),
 ):
-    image_bytes = image.file.read()
-    frame = ml.decode_image(image_bytes)
-    try:
-        vector_bytes, crop, sharpness = ml.detect_and_embed(frame)
-    except ml.NoFaceDetected:
-        raise HTTPException(422, detail="No face detected")
+    vector_bytes, crop, sharpness = _decode_and_embed(image)
 
     if not force:
         matched_person, score = find_best_match(session, vector_bytes)
@@ -813,20 +832,20 @@ def enroll(
                 person = _add_embedding(
                     session, matched_person, vector_bytes, crop, sharpness
                 )
-                return _person_response(person)
+                return person_response(person)
             raise HTTPException(
                 409,
                 detail={
-                    "existingPerson": _person_response(matched_person),
+                    "existingPerson": person_response(matched_person),
                     "score": score,
                 },
             )
 
     person = _create_person(session, name, vector_bytes, crop, sharpness)
-    return _person_response(person)
+    return person_response(person)
 ```
 
-- [ ] **Step 4: Implement Task 6's `GET /people` now, so this task's tests can run**
+- [ ] **Step 5: Implement Task 6's `GET /people` now, so this task's tests can run**
 
 Write `api/routers/people.py` (full version, also satisfies Task 6 — Task 6
 below just adds the thumbnail route and its own tests on top of this):
@@ -837,6 +856,7 @@ from sqlmodel import Session, select
 
 from ..db import get_session
 from ..models import Person
+from ..serializers import person_response
 
 router = APIRouter()
 
@@ -844,13 +864,10 @@ router = APIRouter()
 @router.get("/people")
 def list_people(session: Session = Depends(get_session)):
     people = session.exec(select(Person)).all()
-    return [
-        {"id": p.id, "name": p.name, "thumbnailUrl": f"/people/{p.id}/thumbnail"}
-        for p in people
-    ]
+    return [person_response(p) for p in people]
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
+- [ ] **Step 6: Run test to verify it passes**
 
 ```bash
 pytest tests/api/test_enroll.py -v
@@ -858,10 +875,10 @@ pytest tests/api/test_enroll.py -v
 
 Expected: all 5 tests PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add api/routers/enroll.py api/routers/people.py tests/api/test_enroll.py
+git add api/serializers.py api/routers/enroll.py api/routers/people.py tests/api/test_enroll.py
 git commit -m "Add POST /enroll with duplicate-face detection and merge/force handling"
 ```
 
@@ -874,8 +891,8 @@ git commit -m "Add POST /enroll with duplicate-face detection and merge/force ha
 - Test: `tests/api/test_embeddings.py`
 
 **Interfaces:**
-- Consumes: `_add_embedding`, `_person_response` from Task 4 (already in
-  `api/routers/enroll.py`).
+- Consumes: `_add_embedding`, `_decode_and_embed` from Task 4 (already in
+  `api/routers/enroll.py`); `api.serializers.person_response` (Task 4).
 - Produces: `POST /people/{person_id}/embeddings` accepting form field `image`
   (file). 201 `{id, name, thumbnailUrl}` on success, 404 if person doesn't
   exist, 422 if no face detected.
@@ -945,15 +962,9 @@ def add_embedding_route(
     if person is None:
         raise HTTPException(404, detail="Person not found")
 
-    image_bytes = image.file.read()
-    frame = ml.decode_image(image_bytes)
-    try:
-        vector_bytes, crop, sharpness = ml.detect_and_embed(frame)
-    except ml.NoFaceDetected:
-        raise HTTPException(422, detail="No face detected")
-
+    vector_bytes, crop, sharpness = _decode_and_embed(image)
     person = _add_embedding(session, person, vector_bytes, crop, sharpness)
-    return _person_response(person)
+    return person_response(person)
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -1047,6 +1058,7 @@ from sqlmodel import Session, select
 
 from ..db import get_session, get_thumbnails_dir
 from ..models import Person
+from ..serializers import person_response
 
 router = APIRouter()
 
@@ -1054,10 +1066,7 @@ router = APIRouter()
 @router.get("/people")
 def list_people(session: Session = Depends(get_session)):
     people = session.exec(select(Person)).all()
-    return [
-        {"id": p.id, "name": p.name, "thumbnailUrl": f"/people/{p.id}/thumbnail"}
-        for p in people
-    ]
+    return [person_response(p) for p in people]
 
 
 @router.get("/people/{person_id}/thumbnail")
@@ -1657,9 +1666,11 @@ git commit -m "Add enroll page with webcam capture and duplicate-conflict dialog
   Testing approach matches the spec: pytest integration tests for FastAPI,
   manual click-through for Next.js.
 - **Type consistency checked:** `Person` response shape `{id, name,
-  thumbnailUrl}` is identical across `_person_response` (Python), `GET
-  /people` (Python), and the `Person` TypeScript type — verified field names
-  match exactly (`thumbnailUrl`, not `thumbnail_url`). `find_best_match`
+  thumbnailUrl}` is produced by the single shared `person_response()`
+  (Python, `api/serializers.py`), used by both `enroll.py` and `people.py` —
+  no duplicated dict-literal across modules — and matches the `Person`
+  TypeScript type field-for-field (`thumbnailUrl`, not `thumbnail_url`).
+  `find_best_match`
   signature matches its usage in `enroll.py`. `detect_and_embed` return tuple
   order `(vector_bytes, crop, sharpness)` matches every call site.
 - **No placeholders:** all code blocks are complete, runnable implementations
