@@ -13,5 +13,11 @@ face_recognition/face_db/
 # Optional enrollment galleries
 face_recognition/dino_vit/gallery/
 
+# FastAPI runtime data (SQLite DB + thumbnails) — not source.
+api/data/
+
+# Python virtual environment
+.venv/
+
 # Scratch
 *.zip
