@@ -1,198 +1,163 @@
-# Surveillance: Face Detection, Recognition & Tracking
+# Surveillance: Multi-Camera Face Detection, Recognition & Tracking
 
-A real-time pipeline that **detects** faces from a webcam (YOLO), **recognizes**
-who they are (ArcFace), and **tracks how many times each person appears** — all
-running smoothly on a CPU.
+A surveillance system that connects to **many cameras**, runs each through a
+**detection → recognition → tracking** pipeline, and presents everything on a
+**web dashboard**: the anonymous people it has seen (no names needed), and for
+each one **when** and **at which camera/place** they appeared.
 
-It auto-enrolls people as they appear (no manual setup), keeps the same person as
-one identity across poses/lighting, and counts each person's visits (re-entries
-into the frame).
+People are discovered automatically — `person_001`, `person_002`, … — and matched
+**across cameras**, so the same person seen at two cameras is one identity with a
+combined timeline.
 
-> Detailed reference: see **[PIPELINE.md](PIPELINE.md)**.
-
----
-
-## What's in this version (updates)
-
-This builds an end-to-end live system on top of the original detector + ViT
-training code. Highlights:
-
-- **Detection → recognition pipeline** (`live_pipeline.py`) wiring YOLO to a face
-  recognizer, with both running on **background threads** so the video stays smooth.
-- **ArcFace (ONNX Runtime) recognizer** as the default — fast (~5–15 ms/face on
-  CPU) and pose-invariant. The original **DINO/ViT** model is kept as an optional
-  baseline (`--recognizer dino`).
-- **Self-populating vector database** — first time a face is seen it's enrolled;
-  later frames match it. No pre-registration needed.
-- **Face alignment + quality gating** (YuNet landmarks) so embeddings are stable.
-- **Appearance (visit) counter** — increments only when a person leaves the frame
-  and returns; staying visible doesn't increment it.
-- **Best-shot thumbnails** — each person's thumbnail is automatically their
-  sharpest crop, and every crop from every run is archived.
-- **`stats.py`** — prints visits/sightings per identity.
-
-### Why ArcFace replaced the ViT for recognition
-
-Measured on crops of the *same person* in different poses:
-
-| | DINO/ViT | ArcFace ONNX |
-|---|---|---|
-| Same-person similarity across poses | ~0.0 (splits into many IDs) | **+0.3 to +0.6** (one ID) |
-| Speed on CPU | ~500 ms/face | **~5–15 ms/face** |
-
-The ViT (`face_recognition/dino_vit/`) is retained as a selectable baseline.
+> CV pipeline internals: see **[PIPELINE.md](PIPELINE.md)**.
+> Design decisions & build plan: see **[docs/superpowers/](docs/superpowers/)**.
 
 ---
 
 ## Architecture
 
+Three parts, connected over HTTP around one source of truth (the API's database):
+
 ```
- webcam ──► [main thread] capture + draw + display        (~30 fps, smooth)
-              │ submits latest frame              ▲ overlays boxes + labels
-              ▼                                   │
-       [DetectionWorker]  YOLO @ imgsz 320  ──► boxes + IoU track ids
-              │ aligned face crops (YuNet 112x112)
-              ▼
-       [RecognitionWorker]  ArcFace ONNX embedding
-              │
-              ▼
-       FaceDatabase.match_or_add
-         ├─ cosine ≥ threshold ─► existing identity (running-mean update)
-         └─ else                ─► enroll NEW identity (person_NNN)
-              │
-              ▼
-       AppearanceCounter (visits) + sharpest-thumbnail + sighting archive
+ CAMERAS (anywhere)                 SERVER (one machine)                 BROWSER
+ ─────────────────                  ────────────────────                ───────
+ laptop webcam ─ publisher.py ─MJPEG┐
+ IP camera ────────────────────RTSP─┤ source  ┌──────────────────────┐
+ video file ───────────────────path─┘────────►│ Supervisor           │
+                                               │  one worker / camera │
+                                               │   detect→track→embed │
+                                               │      │ embedding      │
+                                               │      ▼                │
+                                               │  FastAPI              │
+                                               │   central matching    │◄── polling ── Dashboard
+                                               │   Person/Camera/      │    (1–2s)     (Next.js)
+                                               │   Sighting (SQLite)    │
+                                               │   + MJPEG preview proxy│──── preview ──►
+                                               └───────────────────────┘
 ```
 
-Three threads keep the heavy work off the display loop: capture/draw (main),
-detection (YOLO), and recognition (ArcFace).
+- **Workers run on the server**, one per camera, spawned and supervised by the
+  API. A remote laptop contributes its webcam by running `publisher.py` (an MJPEG
+  stream the server pulls); real IP cameras use their `rtsp://` URL directly.
+- **Matching is central**: each worker sends embeddings to the API, which assigns
+  identities against one shared gallery — that's what makes cross-camera identity
+  work.
+- **One visit = one `Sighting`** (start / heartbeat / end); a background reaper
+  closes visits orphaned by a crashed worker.
 
 ---
 
-## Repository layout
+## Quick start (no hardware needed)
 
+```bash
+make install                       # venv + Python deps + web deps  (one time)
 ```
-live_pipeline.py            # the real-time app (run this)
-stats.py                    # print DB summary (visits, sightings, seen times)
-requirements.txt
-PIPELINE.md                 # detailed docs
 
-face_extraction/
-    last.pt                 # trained YOLO face detector
-    live_face_extraction.py # standalone detection demo
+Then in two terminals (from the repo root):
 
-face_recognition/           # ACTIVE recognition system (ArcFace)
-    arcface_onnx.py         # ArcFace recognizer (ONNX Runtime, CPU)
-    face_align.py           # YuNet alignment + sharpness gating
-    face_db.py              # self-populating vector database
-    models/
-        w600k_mbf.onnx                       # ArcFace model
-        face_detection_yunet_2023mar.onnx    # landmark model
-    face_db/                # runtime DB (git-ignored; created on first run)
-
-    dino_vit/               # DINO/ViT BASELINE (optional, --recognizer dino)
-        recognizer.py       # ViT recognizer
-        dino_vggface2.py    # training script
-        eval_dino_vggface2.py
-        enroll.py           # gallery enrollment for the ViT
-        best_model/         # trained ViT checkpoint (Git LFS)
-        *.ipynb, submit_*.sh
+```bash
+make api                           # FastAPI backend + supervisor on :8000
+make web                           # Next.js dashboard on :3000
 ```
+
+Seed a hardware-free demo (faces come from the test fixtures):
+
+```bash
+make demo-clips                    # build demo/lobby.mp4 and demo/lab.mp4
+make demo-cameras                  # register two cameras (API must be running)
+```
+
+Open **http://localhost:3000** — within a few seconds the workers detect the
+demo faces and the dashboard fills in.
+
+> First start is slower: each worker loads the YOLO + ArcFace models.
 
 ---
 
-## Install
+## Running with real cameras
+
+**A laptop webcam** — on the laptop (needs only `pip install opencv-python`):
 
 ```bash
-pip install -r requirements.txt
+python publisher.py --source 0 --port 8090
 ```
 
-Requires Python 3.10+, a webcam, and `numpy < 2` (pinned — ultralytics crashes on
-numpy 2). The ArcFace and YuNet model files are included under
-`face_recognition/models/`. The ViT checkpoint is stored via **Git LFS**; run
-`git lfs pull` if you need the `--recognizer dino` baseline.
+Then on the dashboard **Cameras** page, add a camera with source
+`http://<laptop-ip>:8090/stream` and press **Start**.
+
+**An IP / CCTV camera** — add a camera whose source is its stream URL, e.g.
+`rtsp://user:pass@192.168.1.50:554/stream1`. No extra software; the worker opens
+it the same way.
+
+Add as many as the server's CPU can handle. The same person in front of two
+cameras shows up as a single identity with a merged timeline.
 
 ---
 
-## How to run
+## The dashboard
 
-```bash
-python live_pipeline.py
-```
-
-That's it — no enrollment needed. People are auto-enrolled and recognized live.
-
-In the window:
-- **Green** box = recognized existing person.
-- **Orange** box = just enrolled as a new person.
-- **Yellow `...`** = recognition still computing for that face.
-- Label format: `person_001 #3 0.45` = **identity**, **visit count**, cosine score.
-
-Press **`q`** to quit (saves the database).
-
-Use the original ViT instead:
-```bash
-python live_pipeline.py --recognizer dino
-```
-
-### Useful flags
-
-| Flag | Default | Meaning |
-|------|---------|---------|
-| `--recognizer` | `arcface` | `arcface` (fast+accurate) or `dino` (the ViT baseline) |
-| `--threshold` | `0.28` / `0.155` | Same-person cosine threshold (arcface / dino) |
-| `--imgsz` | `320` | YOLO input size (smaller = faster) |
-| `--cam-width` / `--cam-height` | `640` / `480` | Capture resolution |
-| `--min-sharpness` | `40` | Skip blurry faces below this sharpness |
-| `--refresh-secs` | `4` | How often to re-recognize a tracked face |
-| `--reset-db` | off | Start from an empty database |
+| Screen | What it shows |
+|--------|----------------|
+| **Live** (`/`) | Who is currently in view, grouped by camera (updates every ~1–2s). |
+| **People** (`/people`) | Every anonymous identity with visit count, last-seen, in-view flag. |
+| **Person** (`/people/[id]`) | The appearance timeline — each visit's camera, place and time — plus an optional editable label. |
+| **Cameras** (`/cameras`) | Add cameras, start/stop their workers, see status, and watch a **live preview**. |
+| **Search** (`/search`) | Upload a face to check whether it's on record (read-only — nothing is saved). |
 
 ---
 
 ## How it works
 
-1. **Detection** — YOLO finds face boxes (background thread, `imgsz 320`). A simple
-   IoU tracker assigns a stable id to each face across frames.
-2. **Alignment** — YuNet detects 5 landmarks; the face is warped to a canonical
-   112×112 pose. Blurry frames are skipped.
-3. **Recognition** — ArcFace turns the aligned crop into a 512-d embedding
-   (background thread).
-4. **Matching / enrollment** — the embedding is compared (cosine) to every stored
-   identity. Above threshold → that person (their stored embedding is averaged in);
-   otherwise a new `person_NNN` is enrolled.
-5. **Counting** — a person staying in frame keeps one track id (counted once). When
-   they leave (track ages out after ~1.5 s) and return, they get a new track id but
-   the same identity → visit count +1.
-6. **Storage** — each person's **sharpest** crop becomes their thumbnail; **every**
-   crop is archived; counts/metadata persist across runs.
-
-### Database output (`face_recognition/face_db/<backend>/`)
-
-```
-embeddings.pt     # identities + embeddings + counts
-metadata.json     # per-identity: appearances (visits), sightings, first/last seen
-thumbnails/       # sharpest crop per identity
-sightings/        # every crop, grouped by identity, kept across runs
-```
-
-This folder is git-ignored (runtime + personal data).
+1. **Detect** — each worker runs the YOLO face detector and an IoU tracker for
+   stable per-face track ids (shared core in `pipeline/core.py`).
+2. **Align + embed** — faces are aligned (YuNet landmarks) and turned into 512-d
+   ArcFace embeddings; blurry frames are skipped.
+3. **Report** — on first recognizing a track the worker opens a sighting
+   (`POST /sightings`); it heartbeats while the face stays, and ends the sighting
+   when the track drops.
+4. **Match centrally** — the API matches each embedding against the in-memory
+   gallery (cosine ≥ threshold). A hit reuses that person; otherwise a new
+   anonymous `person_NNN` is created — inside a lock so two cameras can't create
+   duplicates for the same new face.
+5. **Show** — the dashboard polls the API for live state, per-person timelines,
+   and camera status, and streams on-demand previews proxied from the workers.
 
 ---
 
-## Stats
+## Development
 
 ```bash
-python stats.py                 # visits / sightings / first-last seen, per person
-python stats.py --sort recent   # also: visits, sightings, name
-python stats.py --recognizer dino
+make test          # API test suite (pytest)
+make api           # backend with the supervisor
+make web           # dashboard (set API_URL=... to point elsewhere)
 ```
+
+Key environment variables: `FACE_API_DATA_DIR` (SQLite + thumbnails location),
+`FACE_API_SELF_URL` (URL workers use to reach the API), `NEXT_PUBLIC_API_URL`
+(dashboard → API base URL; see `web/.env.local.example`).
+
+The standalone local-debug viewer (single webcam, on-screen window, no server)
+is still available:
+
+```bash
+python live_pipeline.py
+```
+
+---
+
+## Future work
+
+Authentication/roles; an annotated (boxes + labels) preview tab; a vector-DB
+implementation of the `GalleryMatcher` interface for very large galleries;
+server-push (SSE) instead of polling; containerized deployment.
 
 ---
 
 ## Notes & limitations
 
-- **CPU only here** — works fine; a CUDA GPU would speed detection/recognition
-  further but isn't required.
-- **Threshold tuning** — if two different people merge into one identity, raise
-  `--threshold`; if one person splits, lower it.
-- The ViT baseline is kept for reference; ArcFace is recommended for real use.
+- **CPU-bound at scale** — every worker runs YOLO + ArcFace; many high-res
+  streams on one machine will saturate CPU. Use fewer/lower-res cameras or a GPU.
+- **Threshold tuning** — if two people merge into one identity, raise the match
+  threshold; if one person splits into several, lower it.
+- The DINO/ViT recognizer is retained as a selectable baseline for the standalone
+  viewer (`python live_pipeline.py --recognizer dino`); ArcFace is the default.
