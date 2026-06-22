@@ -1,26 +1,99 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --void: #07090a;
+  --surface: #0d1410;
+  --surface-raised: #121b15;
+  --edge: #1f2e26;
+  --edge-bright: #345042;
+  --ink: #d9eee1;
+  --faint: #5e7468;
+  --green: #39ff84;
+  --green-dim: rgba(57, 255, 132, 0.1);
+  --amber: #ffb020;
+  --amber-dim: rgba(255, 176, 32, 0.1);
+  --red: #ff4d4d;
+  --red-dim: rgba(255, 77, 77, 0.1);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-void: var(--void);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-edge: var(--edge);
+  --color-edge-bright: var(--edge-bright);
+  --color-ink: var(--ink);
+  --color-faint: var(--faint);
+  --color-green: var(--green);
+  --color-amber: var(--amber);
+  --color-red: var(--red);
+  --color-green-dim: var(--green-dim);
+  --color-amber-dim: var(--amber-dim);
+  --color-red-dim: var(--red-dim);
+  --font-display: var(--font-display);
+  --font-mono: var(--font-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+html,
+body {
+  background: var(--void);
+}
+
+.hud-surface {
+  color: var(--ink);
+  font-family: var(--font-mono), monospace;
+  position: relative;
+  isolation: isolate;
+}
+
+/* faint targeting grid */
+.hud-surface::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: linear-gradient(rgba(57, 255, 132, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(57, 255, 132, 0.04) 1px, transparent 1px);
+  background-size: 28px 28px;
+  background-position: -1px -1px;
+}
+
+/* crt scanlines */
+.hud-surface::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.4;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 2px,
+    rgba(0, 0, 0, 0.25) 3px
+  );
+}
+
+.hud-surface > * {
+  position: relative;
+  z-index: 2;
+}
+
+.font-display {
+  font-family: var(--font-display), sans-serif;
+}
+
+@keyframes blink-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+.rec-dot {
+  animation: blink-dot 1.6s ease-in-out infinite;
 }

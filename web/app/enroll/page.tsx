@@ -8,6 +8,7 @@ import {
   addEmbedding,
   enroll,
 } from "@/lib/api";
+import { CornerBrackets } from "@/components/CornerBrackets";
 
 export default function EnrollPage() {
   const router = useRouter();
@@ -90,29 +91,49 @@ export default function EnrollPage() {
   }
 
   return (
-    <main className="mx-auto max-w-md p-8">
-      <h1 className="mb-4 text-2xl font-semibold">Enroll a new person</h1>
+    <main className="mx-auto w-full max-w-lg px-6 py-10">
+      <header className="mb-8 border-b border-edge pb-6">
+        <p className="mb-1 text-xs tracking-[0.3em] text-faint">
+          FACE-DASH // NEW ENTRY
+        </p>
+        <h1 className="font-display text-4xl font-bold tracking-wide text-ink">
+          ENROLL SUBJECT
+        </h1>
+      </header>
 
-      <input
-        className="mb-4 w-full rounded border p-2"
-        placeholder="Name"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-      />
+      <label className="mb-1 block text-[11px] uppercase tracking-widest text-faint">
+        Identity label
+      </label>
+      <div className="mb-6 flex items-center border border-edge bg-surface px-3 focus-within:border-edge-bright">
+        <span className="mr-2 text-green">{">"}</span>
+        <input
+          className="w-full bg-transparent py-2.5 text-ink outline-none placeholder:text-faint"
+          placeholder="e.g. alice"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+      </div>
 
       {!previewUrl ? (
         <div>
-          <video ref={videoRef} className="w-full rounded bg-black" muted />
-          <div className="mt-2 flex gap-2">
+          <div className="relative aspect-video w-full overflow-hidden border border-edge bg-void">
+            <CornerBrackets color="var(--green)" />
+            <video ref={videoRef} className="h-full w-full object-cover" muted />
+            <span className="absolute left-2 top-2 flex items-center gap-1.5 text-[11px] uppercase tracking-widest text-green">
+              <span className="h-1.5 w-1.5 rounded-full bg-green rec-dot" />
+              live
+            </span>
+          </div>
+          <div className="mt-3 flex gap-3">
             <button
-              className="rounded bg-gray-200 px-4 py-2"
+              className="flex-1 border border-edge-bright px-4 py-2.5 text-sm uppercase tracking-widest text-ink transition-colors hover:bg-surface-raised"
               onClick={startCamera}
               type="button"
             >
               Start camera
             </button>
             <button
-              className="rounded bg-blue-600 px-4 py-2 text-white"
+              className="flex-1 border border-green/60 px-4 py-2.5 text-sm uppercase tracking-widest text-green transition-colors hover:bg-green hover:text-void"
               onClick={capture}
               type="button"
             >
@@ -122,19 +143,29 @@ export default function EnrollPage() {
         </div>
       ) : (
         <div>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={previewUrl} alt="Captured face" className="w-full rounded" />
-          <div className="mt-2 flex gap-2">
-            <button className="rounded bg-gray-200 px-4 py-2" onClick={retake} type="button">
+          <div className="relative aspect-video w-full overflow-hidden border border-edge bg-void">
+            <CornerBrackets color="var(--amber)" />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={previewUrl} alt="Captured face" className="h-full w-full object-cover" />
+            <span className="absolute left-2 top-2 text-[11px] uppercase tracking-widest text-amber">
+              frame captured
+            </span>
+          </div>
+          <div className="mt-3 flex gap-3">
+            <button
+              className="flex-1 border border-edge-bright px-4 py-2.5 text-sm uppercase tracking-widest text-ink transition-colors hover:bg-surface-raised"
+              onClick={retake}
+              type="button"
+            >
               Retake
             </button>
             <button
-              className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50"
+              className="flex-1 border border-green/60 px-4 py-2.5 text-sm uppercase tracking-widest text-green transition-colors hover:bg-green hover:text-void disabled:cursor-not-allowed disabled:opacity-40"
               onClick={() => save(false)}
               disabled={!name || submitting}
               type="button"
             >
-              Save
+              {submitting ? "Saving…" : "Save"}
             </button>
           </div>
         </div>
@@ -142,35 +173,40 @@ export default function EnrollPage() {
 
       <canvas ref={canvasRef} className="hidden" />
 
-      {error && <p className="mt-4 text-red-600">{error}</p>}
+      {error && (
+        <div className="mt-5 border border-red/50 bg-red-dim px-4 py-3 text-sm text-red">
+          [!] {error}
+        </div>
+      )}
 
       {conflict && (
-        <div className="mt-4 rounded border border-yellow-400 bg-yellow-50 p-4">
-          <p className="mb-3">
-            This looks like <strong>{conflict.existingPerson.name}</strong> (score{" "}
-            {conflict.score.toFixed(2)}). Is this the same person?
+        <div className="mt-5 border border-amber/60 bg-amber-dim px-4 py-4">
+          <p className="mb-3 text-sm leading-relaxed text-ink">
+            <span className="text-amber">[!] match found —</span> this looks like{" "}
+            <strong className="text-amber">{conflict.existingPerson.name}</strong> (cosine{" "}
+            {conflict.score.toFixed(2)}). Same person?
           </p>
           <div className="flex flex-wrap gap-2">
             <button
-              className="rounded bg-gray-200 px-3 py-1"
+              className="border border-edge-bright px-3 py-1.5 text-xs uppercase tracking-widest text-ink transition-colors hover:bg-surface-raised"
               onClick={() => setConflict(null)}
               type="button"
             >
               Cancel
             </button>
             <button
-              className="rounded bg-gray-200 px-3 py-1"
+              className="border border-green/60 px-3 py-1.5 text-xs uppercase tracking-widest text-green transition-colors hover:bg-green hover:text-void"
               onClick={resolveConflictAddPhoto}
               type="button"
             >
-              Add photo to {conflict.existingPerson.name} instead
+              Add photo to {conflict.existingPerson.name}
             </button>
             <button
-              className="rounded bg-gray-200 px-3 py-1"
+              className="border border-amber/60 px-3 py-1.5 text-xs uppercase tracking-widest text-amber transition-colors hover:bg-amber hover:text-void"
               onClick={resolveConflictEnrollAnyway}
               type="button"
             >
-              No, enroll as new person
+              Enroll as new person
             </button>
           </div>
         </div>
