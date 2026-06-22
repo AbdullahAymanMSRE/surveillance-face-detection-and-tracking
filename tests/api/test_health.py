@@ -11,11 +11,11 @@ def test_health(client):
 
 
 def test_person_roundtrip(session):
-    person = Person(name="Alice")
+    person = Person(label="Alice")
     session.add(person)
     session.commit()
     session.refresh(person)
     assert person.id is not None
 
     loaded = session.get(Person, person.id)
-    assert loaded.name == "Alice"
+    assert loaded.label == "Alice"

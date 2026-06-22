@@ -19,5 +19,8 @@ api/data/
 # Python virtual environment
 .venv/
 
+# Generated demo clips (recreate with `make demo-clips`)
+demo/*.mp4
+
 # Scratch
 *.zip
