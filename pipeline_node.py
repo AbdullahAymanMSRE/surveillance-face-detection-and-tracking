@@ -141,9 +141,9 @@ def main() -> int:
     p.add_argument("--preview-port", type=int, default=0)
     p.add_argument("--threshold", type=float, default=0.28)
     p.add_argument("--imgsz", type=int, default=320)
-    p.add_argument("--conf", type=float, default=0.3)
+    p.add_argument("--conf", type=float, default=0.5)
     p.add_argument("--refresh-secs", type=float, default=4.0)
-    p.add_argument("--min-face", type=int, default=60)
+    p.add_argument("--min-face", type=int, default=90)
     p.add_argument("--max-seconds", type=float, default=0.0,
                    help="Stop after N seconds (0 = run forever; for testing)")
     args = p.parse_args()

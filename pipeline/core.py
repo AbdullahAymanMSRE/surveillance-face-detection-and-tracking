@@ -34,6 +34,17 @@ DEFAULT_DETECTOR = _REPO_ROOT / "face_extraction" / "last.pt"
 Box = Tuple[int, int, int, int]
 
 
+def _black_border_frac(crop: np.ndarray, thresh: int = 12) -> float:
+    """Fraction of (near-)black pixels in a crop.
+
+    Landmark warping fills out-of-image areas with black, so a partial or
+    frame-edge face produces an aligned crop with a large black wedge. A high
+    fraction means the alignment had little real face to work with -> skip it."""
+    if crop.size == 0:
+        return 1.0
+    return float((crop.max(axis=2) < thresh).mean())
+
+
 # ── Minimal IoU tracker (gives faces stable ids across frames) ────────────────
 
 def _iou(a: Box, b: Box) -> float:
@@ -253,10 +264,16 @@ class PipelineCore:
 
     def __init__(self, detector, recognizer, processor: FaceProcessor, *,
                  conf: float = 0.3, imgsz: int = 320, refresh_secs: float = 4.0,
-                 min_face: int = 60):
+                 min_face: int = 60, max_black_frac: float = 0.30,
+                 require_landmarks: bool = True):
         self.processor = processor
         self.refresh_secs = refresh_secs
         self.min_face = min_face
+        self.max_black_frac = max_black_frac
+        # Only embed when YuNet actually finds facial landmarks in the box. This
+        # rejects the detector's non-face false positives (a shoulder, the back
+        # of a head) that YOLO boxed but that contain no real face.
+        self.require_landmarks = require_landmarks and (processor.detector is not None)
         self.tracker = IoUTracker()
         self.det_worker = DetectionWorker(detector, self.tracker, conf, imgsz)
         self.embed_worker = EmbeddingWorker(recognizer)
@@ -274,8 +291,10 @@ class PipelineCore:
             x1, y1, x2, y2 = box
             if (min(x2 - x1, y2 - y1) >= self.min_face
                     and self.embed_worker.needs_recognition(tid, self.refresh_secs)):
-                crop, sharpness, _ = self.processor.process(frame, box)
-                if self.processor.is_sharp(sharpness):
+                crop, sharpness, aligned = self.processor.process(frame, box)
+                if ((aligned or not self.require_landmarks)
+                        and self.processor.is_sharp(sharpness)
+                        and _black_border_frac(crop) <= self.max_black_frac):
                     self.embed_worker.submit(tid, box, crop, sharpness)
         return boxes, track_ids, self.embed_worker.drain_new()
 
@@ -285,10 +304,10 @@ class PipelineCore:
 
 
 def build_arcface_core(detector_path: str | Path = DEFAULT_DETECTOR,
-                       threshold: float = 0.28, *, conf: float = 0.3,
+                       threshold: float = 0.28, *, conf: float = 0.5,
                        imgsz: int = 320, refresh_secs: float = 4.0,
-                       min_face: int = 60, min_sharpness: float = 40.0,
-                       align: bool = True
+                       min_face: int = 90, min_sharpness: float = 60.0,
+                       align: bool = True, require_landmarks: bool = True
                        ) -> Tuple[PipelineCore, ArcFaceONNXRecognizer]:
     """Build a ready-to-run ArcFace pipeline core (used by the headless worker)."""
     from ultralytics import YOLO
@@ -303,5 +322,6 @@ def build_arcface_core(detector_path: str | Path = DEFAULT_DETECTOR,
     if not align:
         processor.detector = None
     core = PipelineCore(detector, recognizer, processor, conf=conf, imgsz=imgsz,
-                        refresh_secs=refresh_secs, min_face=min_face)
+                        refresh_secs=refresh_secs, min_face=min_face,
+                        require_landmarks=require_landmarks and align)
     return core, recognizer

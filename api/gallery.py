@@ -72,6 +72,26 @@ class InMemoryGallery:
             self._ids.append(person_id)
             self._matrix = v if self._matrix is None else np.vstack([self._matrix, v])
 
+    def count_for_person(self, person_id: int) -> int:
+        """How many exemplars this person currently holds."""
+        with self._lock:
+            return sum(1 for pid in self._ids if pid == person_id)
+
+    def best_for_person(self, person_id: int, vector: np.ndarray) -> float:
+        """Best cosine of ``vector`` against this person's own exemplars.
+
+        Used to decide whether a new frame shows a pose this person doesn't
+        already cover (low value -> a genuinely new view worth storing)."""
+        v = _normalize(vector)
+        with self._lock:
+            if self._matrix is None:
+                return 0.0
+            mask = np.array([pid == person_id for pid in self._ids])
+            if not mask.any():
+                return 0.0
+            sims = self._matrix[mask] @ v
+        return float(sims.max())
+
     def __len__(self) -> int:
         with self._lock:
             return len(self._ids)

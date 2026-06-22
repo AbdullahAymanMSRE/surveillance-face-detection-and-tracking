@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 from sqlmodel import Session, select
 
+from .consolidate import consolidate_identities
 from .db import get_engine
 from .models import Sighting
 
@@ -35,14 +36,23 @@ def close_stale_sightings(session: Session, timeout_secs: float) -> int:
     return len(stale)
 
 
-def start_reaper(interval_secs: float = 5.0, timeout_secs: float = 15.0) -> threading.Thread:
-    """Start the reaper loop on a daemon thread and return it."""
+def start_reaper(interval_secs: float = 5.0, timeout_secs: float = 15.0,
+                 consolidate_every: int = 4) -> threading.Thread:
+    """Start the reaper loop on a daemon thread and return it.
+
+    Every ``consolidate_every`` ticks it also runs identity consolidation
+    (merging cold-start splits of the same face); set to 0 to disable.
+    """
     def loop() -> None:
+        tick = 0
         while True:
             time.sleep(interval_secs)
+            tick += 1
             try:
                 with Session(get_engine()) as session:
                     close_stale_sightings(session, timeout_secs)
+                    if consolidate_every and tick % consolidate_every == 0:
+                        consolidate_identities(session)
             except Exception:
                 # The engine may be mid-reset (tests) or the DB briefly absent;
                 # the next tick recovers.

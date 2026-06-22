@@ -27,6 +27,31 @@ from ..serializers import person_response, sighting_response
 
 router = APIRouter()
 
+# Multi-exemplar enrollment: a person accumulates several pose exemplars (e.g.
+# frontal + profile) instead of a single frozen reference. Within one continuous
+# track every heartbeat is already bound to that track's person, so as the head
+# turns we capture the new pose under the *same* identity — which is what keeps a
+# side profile from spawning its own person.
+EXEMPLAR_MAX = 12            # cap exemplars per person (bounds the gallery)
+EXEMPLAR_NOVELTY = 0.50      # only store a frame whose pose isn't already covered
+EXEMPLAR_MIN_SHARPNESS = 60.0  # never enroll a blurry crop as a reference
+
+
+def _maybe_add_exemplar(session: Session, person_id: int, emb_bytes: bytes,
+                        vec: np.ndarray, sharpness: float) -> None:
+    """Store ``vec`` as a new pose exemplar for ``person_id`` when it is sharp,
+    genuinely novel, and the per-person cap isn't reached."""
+    if sharpness < EXEMPLAR_MIN_SHARPNESS:
+        return
+    gallery = get_gallery()
+    if gallery.count_for_person(person_id) >= EXEMPLAR_MAX:
+        return
+    if gallery.best_for_person(person_id, vec) >= EXEMPLAR_NOVELTY:
+        return  # this pose is already well represented
+    session.add(FaceEmbedding(person_id=person_id, vector=emb_bytes))
+    session.commit()
+    gallery.add(person_id, vec)
+
 
 @router.get("/sightings/active")
 def active_sightings(session: Session = Depends(get_session)):
@@ -93,6 +118,8 @@ def open_sighting(
                 session.add(person)
                 session.commit()
                 thumb = crop_bytes
+            # Re-matched an existing identity: capture this pose if it's new.
+            _maybe_add_exemplar(session, person_id, emb_bytes, vec, sharpness)
 
         sighting = Sighting(person_id=person_id, camera_id=camera_id,
                             best_sharpness=sharpness)
@@ -112,6 +139,7 @@ def open_sighting(
 def heartbeat(
     sighting_id: int,
     sharpness: float = Form(-1.0),
+    embedding: Optional[UploadFile] = File(None),
     crop: Optional[UploadFile] = File(None),
     session: Session = Depends(get_session),
 ):
@@ -132,6 +160,13 @@ def heartbeat(
             thumb = (person.id, crop.file.read())
     session.add(sighting)
     session.commit()
+    # Grow this person's pose coverage from frames seen during the same visit.
+    # This is what lets a profile turn enroll under the existing identity.
+    if embedding is not None:
+        emb_bytes = embedding.file.read()
+        vec = np.frombuffer(emb_bytes, dtype=np.float32)
+        if vec.size:
+            _maybe_add_exemplar(session, sighting.person_id, emb_bytes, vec, sharpness)
     if thumb is not None:
         _save_thumbnail(*thumb)
     return {"ok": True}

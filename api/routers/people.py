@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from .. import ml
+from ..consolidate import consolidate_identities
 from ..db import get_session, get_thumbnails_dir
 from ..gallery import get_gallery
 from ..models import Camera, Person, Sighting
@@ -46,6 +47,13 @@ def list_people(session: Session = Depends(get_session)):
     out = [_person_summary(p, by_person.get(p.id, [])) for p in people]
     out.sort(key=lambda d: (d["lastSeen"] or ""), reverse=True)
     return out
+
+
+@router.post("/people/consolidate")
+def consolidate(session: Session = Depends(get_session)):
+    """Merge anonymous identities that are the same face (cold-start splits)."""
+    removed = consolidate_identities(session)
+    return {"merged": removed}
 
 
 @router.get("/people/{person_id}")
