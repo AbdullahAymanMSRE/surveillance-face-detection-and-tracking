@@ -33,7 +33,7 @@ def _save_thumbnail(person_id: int, crop_bgr) -> None:
 def _create_person(
     session: Session, name: str, vector_bytes: bytes, crop_bgr, sharpness: float
 ) -> Person:
-    person = Person(name=name, best_sharpness=sharpness)
+    person = Person(label=name, best_sharpness=sharpness)
     session.add(person)
     session.commit()
     session.refresh(person)
@@ -68,7 +68,7 @@ def enroll(
     if not force:
         matched_person, score = find_best_match(session, vector_bytes)
         if matched_person is not None:
-            if matched_person.name == name:
+            if matched_person.label == name:
                 person = _add_embedding(
                     session, matched_person, vector_bytes, crop, sharpness
                 )

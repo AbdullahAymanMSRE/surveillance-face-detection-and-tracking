@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
-from api import db
+from api import db, gallery
 from api.main import app
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
@@ -13,10 +13,13 @@ FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("FACE_API_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("FACE_API_ENABLE_REAPER", "0")
     db.reset_engine()
+    gallery.reset_gallery()
     with TestClient(app) as c:
         yield c
     db.reset_engine()
+    gallery.reset_gallery()
 
 
 @pytest.fixture
