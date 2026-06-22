@@ -1,34 +1,30 @@
 #!/usr/bin/env python3
-"""Real-time face detection + background face recognition pipeline.
+"""Standalone local-debug viewer: live detection + background recognition.
 
-The YOLO detector runs in the main thread at camera frame rate. Detected face
-crops are handed to a background worker thread that runs the DINO+ArcFace
-recognizer. Each embedding is matched against a self-populating vector database
-(FaceDatabase): if it matches a stored face it is recognized; if nothing matches
-(including the very first face), it is saved as a new identity. Results are drawn
-back onto the live video as soon as they are ready, so the detection loop never
-blocks on the (heavier) recognition model.
+This is the offline development tool. It drives the shared, headless
+``pipeline.core`` (detection + IoU tracking + alignment + embedding) and matches
+each embedding against a self-populating on-disk vector database
+(:class:`FaceDatabase`): if it matches a stored face it is recognized; if nothing
+matches (including the very first face), it is saved as a new identity. Results
+are drawn back onto the live video as soon as they are ready, so the detection
+loop never blocks on the (heavier) recognition model.
 
-No setup needed — the database fills itself as people appear. Optionally seed it
-with named people first:
-    cd face_recognition
-    python enroll.py --webcam --name alice
+The production multi-camera path does not use this file — it uses the headless
+``pipeline_node.py`` worker, which reports to the central API instead of writing
+local files. This viewer remains handy for testing a webcam without the server.
 
-Run the live pipeline from the repo root:
+No setup needed — the database fills itself as people appear. Run from the repo
+root:
     python live_pipeline.py
 """
 
 import argparse
-import os
-import queue
 import sys
-import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import cv2
-import numpy as np
 import torch
 
 _REPO_ROOT = Path(__file__).resolve().parent
@@ -39,6 +35,8 @@ from arcface_onnx import ArcFaceONNXRecognizer  # noqa: E402
 from face_db import FaceDatabase  # noqa: E402
 from face_align import FaceProcessor  # noqa: E402
 
+from pipeline.core import PipelineCore  # noqa: E402
+
 DEFAULT_DETECTOR = _REPO_ROOT / "face_extraction" / "last.pt"
 DEFAULT_RUN_DIR = _REPO_ROOT / "face_recognition" / "dino_vit" / "best_model"
 DEFAULT_GALLERY = _REPO_ROOT / "face_recognition" / "dino_vit" / "gallery" / "gallery.pt"
@@ -47,191 +45,7 @@ DEFAULT_DB_DIR = _REPO_ROOT / "face_recognition" / "face_db"
 WINDOW = "Surveillance — detection + recognition"
 
 
-# ── Minimal IoU tracker (gives faces stable ids across frames) ────────────────
-
-def _iou(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> float:
-    ax1, ay1, ax2, ay2 = a
-    bx1, by1, bx2, by2 = b
-    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
-    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
-    iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
-    inter = iw * ih
-    if inter == 0:
-        return 0.0
-    area_a = (ax2 - ax1) * (ay2 - ay1)
-    area_b = (bx2 - bx1) * (by2 - by1)
-    return inter / (area_a + area_b - inter)
-
-
-class IoUTracker:
-    def __init__(self, iou_threshold: float = 0.3, max_age: int = 15):
-        self.iou_threshold = iou_threshold
-        self.max_age = max_age
-        self.next_id = 0
-        self.tracks: Dict[int, Dict] = {}  # id -> {"box", "age"}
-
-    def update(self, boxes: List[Tuple[int, int, int, int]]) -> List[int]:
-        """Assign a track id to each detection box (same order as input)."""
-        for tr in self.tracks.values():
-            tr["age"] += 1
-
-        assigned: List[int] = [-1] * len(boxes)
-        used_tracks = set()
-        for i, box in enumerate(boxes):
-            best_id, best_iou = -1, self.iou_threshold
-            for tid, tr in self.tracks.items():
-                if tid in used_tracks:
-                    continue
-                score = _iou(box, tr["box"])
-                if score >= best_iou:
-                    best_id, best_iou = tid, score
-            if best_id >= 0:
-                assigned[i] = best_id
-                used_tracks.add(best_id)
-                self.tracks[best_id] = {"box": box, "age": 0}
-            else:
-                tid = self.next_id
-                self.next_id += 1
-                self.tracks[tid] = {"box": box, "age": 0}
-                assigned[i] = tid
-
-        # Drop stale tracks.
-        for tid in [t for t, tr in self.tracks.items() if tr["age"] > self.max_age]:
-            del self.tracks[tid]
-        return assigned
-
-
-# ── Background recognition worker ─────────────────────────────────────────────
-
-class RecognitionWorker(threading.Thread):
-    def __init__(self, recognizer: FaceRecognizer, db: FaceDatabase,
-                 max_queue: int = 8, max_batch: int = 8):
-        super().__init__(daemon=True)
-        self.recognizer = recognizer
-        self.db = db
-        self.max_batch = max_batch
-        self.queue: "queue.Queue[Tuple[int, np.ndarray]]" = queue.Queue(max_queue)
-        # track_id -> (label, score, ts, is_new)
-        self.results: Dict[int, Tuple[str, float, float, bool]] = {}
-        self.inflight: set = set()
-        self._lock = threading.Lock()
-        self._stop = threading.Event()
-
-    def submit(self, track_id: int, crop: np.ndarray) -> None:
-        """Queue a crop for recognition; drop it if the worker is busy (stay real-time)."""
-        with self._lock:
-            if track_id in self.inflight:
-                return
-            self.inflight.add(track_id)
-        try:
-            self.queue.put_nowait((track_id, crop))
-        except queue.Full:
-            with self._lock:
-                self.inflight.discard(track_id)
-
-    def get_result(self, track_id: int) -> Optional[Tuple[str, float, bool]]:
-        with self._lock:
-            r = self.results.get(track_id)
-        return (r[0], r[1], r[3]) if r else None
-
-    def needs_recognition(self, track_id: int, refresh_secs: float) -> bool:
-        with self._lock:
-            if track_id in self.inflight:
-                return False
-            r = self.results.get(track_id)
-        return r is None or (time.time() - r[2]) > refresh_secs
-
-    def run(self) -> None:
-        while not self._stop.is_set():
-            try:
-                first = self.queue.get(timeout=0.2)
-            except queue.Empty:
-                continue
-            # Drain whatever else is queued so the (heavy) ViT forward pass runs
-            # on a batch of faces at once instead of one at a time.
-            batch = [first]
-            while len(batch) < self.max_batch:
-                try:
-                    batch.append(self.queue.get_nowait())
-                except queue.Empty:
-                    break
-
-            track_ids = [b[0] for b in batch]
-            crops = [b[1] for b in batch]
-            try:
-                embeds = self.recognizer.embed_batch(crops)  # [B, embed_dim]
-                now = time.time()
-                for track_id, emb, crop in zip(track_ids, embeds, crops):
-                    # Compare against the vector DB; enroll a new identity if none match.
-                    label, score, is_new = self.db.match_or_add(emb, crop)
-                    if is_new:
-                        print(f"[db] new identity enrolled: {label} "
-                              f"(best prior score {score:.2f})")
-                    with self._lock:
-                        self.results[track_id] = (label, score, now, is_new)
-            finally:
-                with self._lock:
-                    for track_id in track_ids:
-                        self.inflight.discard(track_id)
-
-    def stop(self) -> None:
-        self._stop.set()
-
-
-# ── Background detection worker (keeps YOLO off the display thread) ────────────
-
-class DetectionWorker(threading.Thread):
-    """Runs YOLO on the most recent frame in the background, so the capture/
-    display loop runs at camera speed instead of blocking on detection."""
-
-    def __init__(self, detector, tracker: "IoUTracker", conf: float, imgsz: int):
-        super().__init__(daemon=True)
-        self.detector = detector
-        self.tracker = tracker
-        self.conf = conf
-        self.imgsz = imgsz
-        self._frame = None
-        self._boxes: List[Tuple[int, int, int, int]] = []
-        self._track_ids: List[int] = []
-        self._lock = threading.Lock()
-        self._stop = threading.Event()
-
-    def submit_frame(self, frame: np.ndarray) -> None:
-        with self._lock:
-            self._frame = frame  # keep only the latest; older frames are dropped
-
-    def get_boxes(self) -> Tuple[List[Tuple[int, int, int, int]], List[int]]:
-        with self._lock:
-            return list(self._boxes), list(self._track_ids)
-
-    def run(self) -> None:
-        while not self._stop.is_set():
-            with self._lock:
-                frame = self._frame
-                self._frame = None
-            if frame is None:
-                time.sleep(0.003)
-                continue
-            results = self.detector.predict(frame, conf=self.conf,
-                                            imgsz=self.imgsz, verbose=False)
-            h, w = frame.shape[:2]
-            boxes: List[Tuple[int, int, int, int]] = []
-            for result in results:
-                for box in result.boxes:
-                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
-                    x1, y1 = max(x1, 0), max(y1, 0)
-                    x2, y2 = min(x2, w), min(y2, h)
-                    if x2 > x1 and y2 > y1:
-                        boxes.append((x1, y1, x2, y2))
-            track_ids = self.tracker.update(boxes)
-            with self._lock:
-                self._boxes, self._track_ids = boxes, track_ids
-
-    def stop(self) -> None:
-        self._stop.set()
-
-
-# ── Appearance (re-entry) counter ─────────────────────────────────────────────
+# ── Appearance (re-entry) counter — viewer-only ──────────────────────────────
 
 class AppearanceCounter:
     """Counts how many times each identity *enters* the frame.
@@ -275,8 +89,6 @@ class AppearanceCounter:
     def get(self, label: str) -> int:
         return self.counts.get(label, 0)
 
-
-# ── Main loop ─────────────────────────────────────────────────────────────────
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Live detection + background recognition")
@@ -380,12 +192,13 @@ def main() -> int:
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.cam_width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.cam_height)
 
-    worker = RecognitionWorker(recognizer, db)
-    worker.start()
-    tracker = IoUTracker()
-    detector_worker = DetectionWorker(detector, tracker, args.conf, args.imgsz)
-    detector_worker.start()
+    core = PipelineCore(detector, recognizer, processor, conf=args.conf,
+                        imgsz=args.imgsz, refresh_secs=args.refresh_secs,
+                        min_face=args.min_face)
+    core.start()
     counter = AppearanceCounter(db)
+    # track_id -> (label, score, is_new); drives what we draw across frames.
+    track_labels: Dict[int, Tuple[str, float, bool]] = {}
     recog_count = 0
 
     print("Running. Press 'q' to quit.")
@@ -397,26 +210,27 @@ def main() -> int:
                 print("Frame grab failed; stopping.", file=sys.stderr)
                 break
 
-            # Detection runs in the background; we just use its latest boxes.
-            detector_worker.submit_frame(frame)
-            boxes, track_ids = detector_worker.get_boxes()
+            boxes, track_ids, events = core.step(frame)
+
+            # Match each finished embedding against the local DB (main thread).
+            for ev in events:
+                label, score, is_new = db.match_or_add(ev.embedding, ev.crop)
+                if is_new:
+                    print(f"[db] new identity enrolled: {label} "
+                          f"(best prior score {score:.2f})")
+                track_labels[ev.track_id] = (label, score, is_new)
+                recog_count += 1
 
             # Update the appearance (re-entry) counter from current tracks.
-            live = {tid: (r[0] if (r := worker.get_result(tid)) else None)
-                    for tid in track_ids}
+            live: Dict[int, Optional[str]] = {
+                tid: (track_labels[tid][0] if tid in track_labels else None)
+                for tid in track_ids
+            }
             counter.update(live)
 
             display = frame.copy()
             for (x1, y1, x2, y2), tid in zip(boxes, track_ids):
-                # Hand off to the recognition worker (non-blocking).
-                if (min(x2 - x1, y2 - y1) >= args.min_face
-                        and worker.needs_recognition(tid, args.refresh_secs)):
-                    # Align + quality-gate before recognition.
-                    crop, sharpness, _ = processor.process(frame, (x1, y1, x2, y2))
-                    if processor.is_sharp(sharpness):
-                        worker.submit(tid, crop)
-
-                res = worker.get_result(tid)
+                res = track_labels.get(tid)
                 if res is None:
                     label, color = "...", (0, 200, 255)          # still processing
                 else:
@@ -429,10 +243,7 @@ def main() -> int:
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
             # Persist the growing database periodically.
-            with worker._lock:
-                done = len(worker.results)
-            if done - recog_count >= args.save_every:
-                recog_count = done
+            if recog_count // max(args.save_every, 1) > 0 and recog_count % args.save_every == 0:
                 db.save()
 
             fps_n += 1
@@ -446,8 +257,7 @@ def main() -> int:
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
     finally:
-        worker.stop()
-        detector_worker.stop()
+        core.stop()
         cap.release()
         cv2.destroyAllWindows()
         db.save()
