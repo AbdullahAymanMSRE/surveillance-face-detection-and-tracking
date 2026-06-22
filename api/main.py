@@ -9,7 +9,7 @@ from . import db
 from .gallery import get_gallery
 from .models import FaceEmbedding
 from .reaper import start_reaper
-from .routers import cameras, enroll, people, sightings
+from .routers import cameras, people, sightings
 from .supervisor import get_supervisor
 
 app = FastAPI(title="Face Dashboard API")
@@ -53,6 +53,5 @@ def health() -> dict:
 
 
 app.include_router(people.router)
-app.include_router(enroll.router)
 app.include_router(sightings.router)
 app.include_router(cameras.router)

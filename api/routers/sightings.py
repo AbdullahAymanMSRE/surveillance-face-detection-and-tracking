@@ -18,11 +18,31 @@ import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlmodel import Session
 
+from sqlmodel import select
+
 from ..db import get_session, get_thumbnails_dir
 from ..gallery import get_gallery, match_create_lock
 from ..models import Camera, FaceEmbedding, Person, Sighting
+from ..serializers import person_response, sighting_response
 
 router = APIRouter()
+
+
+@router.get("/sightings/active")
+def active_sightings(session: Session = Depends(get_session)):
+    """Currently-visible people (open sightings) — the Live/Now view."""
+    rows = session.exec(
+        select(Sighting).where(Sighting.ended_at == None)  # noqa: E711
+        .order_by(Sighting.started_at.desc())
+    ).all()
+    cameras = {c.id: c for c in session.exec(select(Camera)).all()}
+    out = []
+    for s in rows:
+        person = session.get(Person, s.person_id)
+        entry = sighting_response(s, cameras.get(s.camera_id))
+        entry["person"] = person_response(person) if person else None
+        out.append(entry)
+    return out
 
 
 def _save_thumbnail(person_id: int, jpg_bytes: bytes) -> None:
