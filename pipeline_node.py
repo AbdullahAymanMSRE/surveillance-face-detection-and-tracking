@@ -13,8 +13,10 @@ preview port is reserved for the on-demand MJPEG preview added in a later phase.
 """
 
 import argparse
+import http.server
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Dict, Optional
@@ -31,6 +33,64 @@ from pipeline.core import build_arcface_core  # noqa: E402
 # How long a track may be absent before we close its visit. Larger than the
 # tracker's max_age debounce so a brief detection dropout doesn't end a visit.
 END_GRACE_SECS = 2.0
+
+_PREVIEW_BOUNDARY = "frame"
+
+
+class PreviewState:
+    """Holds the latest raw frame so the preview server can serve it."""
+
+    def __init__(self):
+        self._frame = None
+        self._lock = threading.Lock()
+
+    def set_frame(self, frame: np.ndarray) -> None:
+        with self._lock:
+            self._frame = frame
+
+    def snapshot(self):
+        with self._lock:
+            return self._frame
+
+
+def start_preview_server(state: PreviewState, port: int):
+    """Serve the latest raw frame as MJPEG. Encoding happens only while a client
+    is connected (on-demand), so an unwatched camera costs nothing extra."""
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):  # silence access logs
+            pass
+
+        def do_GET(self):
+            if self.path != "/stream":
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header(
+                "Content-Type",
+                f"multipart/x-mixed-replace; boundary={_PREVIEW_BOUNDARY}")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            try:
+                while True:
+                    frame = state.snapshot()
+                    if frame is not None:
+                        ok, buf = cv2.imencode(".jpg", frame)
+                        if ok:
+                            data = buf.tobytes()
+                            self.wfile.write(f"--{_PREVIEW_BOUNDARY}\r\n".encode())
+                            self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                            self.wfile.write(f"Content-Length: {len(data)}\r\n\r\n".encode())
+                            self.wfile.write(data)
+                            self.wfile.write(b"\r\n")
+                    time.sleep(0.1)  # ~10 fps preview
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # client (the API proxy) went away
+
+    server = http.server.ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
 
 
 def _open_capture(source: str) -> cv2.VideoCapture:
@@ -107,6 +167,14 @@ def main() -> int:
         print(f"[node] could not open source: {source}", flush=True)
         return 2
 
+    preview = PreviewState()
+    if args.preview_port:
+        try:
+            start_preview_server(preview, args.preview_port)
+            print(f"[node] preview on :{args.preview_port}/stream", flush=True)
+        except OSError as e:
+            print(f"[node] preview server failed: {e}", flush=True)
+
     api = args.api_url
     camera_id = args.camera_id
     # track_id -> sighting_id (open visits); last time each track was on screen.
@@ -153,6 +221,7 @@ def main() -> int:
                     cap = _open_capture(source)
                 continue
 
+            preview.set_frame(frame)  # raw frame for the on-demand preview
             boxes, track_ids, events = core.step(frame)
             now = time.time()
             for tid in track_ids:

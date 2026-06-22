@@ -5,10 +5,12 @@ import {
   createCamera,
   deleteCamera,
   listCameras,
+  previewUrl,
   startCamera,
   stopCamera,
 } from "@/lib/api";
 import { usePoll } from "@/lib/usePoll";
+import { CornerBrackets } from "@/components/CornerBrackets";
 
 export default function CamerasPage() {
   const { data, error } = usePoll(listCameras, 2000);
@@ -17,6 +19,7 @@ export default function CamerasPage() {
   const [source, setSource] = useState("");
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [previewId, setPreviewId] = useState<number | null>(null);
 
   const addCamera = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -91,48 +94,76 @@ export default function CamerasPage() {
         )}
         {data?.map((cam) => {
           const running = cam.status === "running";
+          const showing = previewId === cam.id;
           return (
-            <div
-              key={cam.id}
-              className="flex flex-wrap items-center gap-x-4 gap-y-2 border border-edge bg-surface px-4 py-3"
-            >
-              <span
-                className={`h-2 w-2 rounded-full ${running ? "bg-green shadow-[0_0_6px_var(--green)] rec-dot" : "bg-faint"}`}
-              />
-              <div className="min-w-0">
-                <p className="font-display tracking-widest text-ink">{cam.name}</p>
-                <p className="truncate text-[11px] text-faint">
-                  {cam.location || "—"} · <span className="text-faint/70">{cam.source}</span>
-                </p>
+            <div key={cam.id} className="border border-edge bg-surface">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
+                <span
+                  className={`h-2 w-2 rounded-full ${running ? "bg-green shadow-[0_0_6px_var(--green)] rec-dot" : "bg-faint"}`}
+                />
+                <div className="min-w-0">
+                  <p className="font-display tracking-widest text-ink">{cam.name}</p>
+                  <p className="truncate text-[11px] text-faint">
+                    {cam.location || "—"} · <span className="text-faint/70">{cam.source}</span>
+                  </p>
+                </div>
+                <span
+                  className={`ml-auto text-xs uppercase tracking-widest ${running ? "text-green" : "text-faint"}`}
+                >
+                  {cam.status}
+                </span>
+                {running && (
+                  <button
+                    onClick={() => setPreviewId(showing ? null : cam.id)}
+                    className={`border px-3 py-1.5 text-xs uppercase tracking-widest transition-colors ${
+                      showing
+                        ? "border-ink/60 text-ink"
+                        : "border-edge-bright text-faint hover:text-ink"
+                    }`}
+                  >
+                    {showing ? "Hide" : "Preview"}
+                  </button>
+                )}
+                {running ? (
+                  <button
+                    onClick={() => stopCamera(cam.id)}
+                    className="border border-amber/60 px-3 py-1.5 text-xs uppercase tracking-widest text-amber transition-colors hover:bg-amber hover:text-void"
+                  >
+                    Stop
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => startCamera(cam.id)}
+                    className="border border-green/60 px-3 py-1.5 text-xs uppercase tracking-widest text-green transition-colors hover:bg-green hover:text-void"
+                  >
+                    Start
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    if (confirm(`Delete camera "${cam.name}"?`)) deleteCamera(cam.id);
+                  }}
+                  className="border border-red/50 px-3 py-1.5 text-xs uppercase tracking-widest text-red transition-colors hover:bg-red hover:text-void"
+                >
+                  Delete
+                </button>
               </div>
-              <span
-                className={`ml-auto text-xs uppercase tracking-widest ${running ? "text-green" : "text-faint"}`}
-              >
-                {cam.status}
-              </span>
-              {running ? (
-                <button
-                  onClick={() => stopCamera(cam.id)}
-                  className="border border-amber/60 px-3 py-1.5 text-xs uppercase tracking-widest text-amber transition-colors hover:bg-amber hover:text-void"
-                >
-                  Stop
-                </button>
-              ) : (
-                <button
-                  onClick={() => startCamera(cam.id)}
-                  className="border border-green/60 px-3 py-1.5 text-xs uppercase tracking-widest text-green transition-colors hover:bg-green hover:text-void"
-                >
-                  Start
-                </button>
+              {showing && (
+                <div className="border-t border-edge p-4">
+                  <div className="relative mx-auto max-w-xl border border-edge bg-void">
+                    <CornerBrackets color="var(--green)" size={12} />
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={previewUrl(cam.id)}
+                      alt={`${cam.name} live preview`}
+                      className="w-full"
+                    />
+                    <span className="absolute right-2 top-2 flex items-center gap-1.5 bg-void/70 px-2 py-1 text-[10px] uppercase tracking-widest text-green">
+                      <span className="h-1.5 w-1.5 rounded-full bg-green rec-dot" /> live
+                    </span>
+                  </div>
+                </div>
               )}
-              <button
-                onClick={() => {
-                  if (confirm(`Delete camera "${cam.name}"?`)) deleteCamera(cam.id);
-                }}
-                className="border border-red/50 px-3 py-1.5 text-xs uppercase tracking-widest text-red transition-colors hover:bg-red hover:text-void"
-              >
-                Delete
-              </button>
             </div>
           );
         })}

@@ -7,7 +7,9 @@ the supervisor reconciles running workers to the enabled set.
 
 from typing import Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
@@ -110,6 +112,29 @@ def start_camera(camera_id: int, session: Session = Depends(get_session)):
     session.refresh(camera)
     get_supervisor().start_camera(camera_id)
     return camera_response(camera)
+
+
+@router.get("/cameras/{camera_id}/preview")
+def preview(camera_id: int, session: Session = Depends(get_session)):
+    """Proxy the worker's on-demand raw MJPEG stream to the browser."""
+    if session.get(Camera, camera_id) is None:
+        raise HTTPException(404, detail="Camera not found")
+    port = get_supervisor().preview_port(camera_id)
+    if port is None:
+        raise HTTPException(503, detail="Camera worker not running")
+    upstream = f"http://127.0.0.1:{port}/stream"
+
+    def relay():
+        try:
+            with httpx.Client(timeout=None) as client:
+                with client.stream("GET", upstream) as resp:
+                    for chunk in resp.iter_raw():
+                        yield chunk
+        except httpx.HTTPError:
+            return  # worker stopped or unreachable
+
+    return StreamingResponse(
+        relay(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 
 @router.post("/cameras/{camera_id}/stop")
