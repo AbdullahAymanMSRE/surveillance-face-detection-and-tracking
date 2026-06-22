@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Rajdhani, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import { NavBar } from "@/components/NavBar";
 
 const rajdhani = Rajdhani({
   variable: "--font-display",
@@ -15,8 +16,8 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "FACE-DASH // Console",
-  description: "Face enrollment and recognition console",
+  title: "SENTINEL // Surveillance Console",
+  description: "Multi-camera face detection, recognition and tracking dashboard",
 };
 
 export default function RootLayout({
@@ -29,7 +30,10 @@ export default function RootLayout({
       lang="en"
       className={`${rajdhani.variable} ${jetbrainsMono.variable} h-full`}
     >
-      <body className="hud-surface min-h-full flex flex-col">{children}</body>
+      <body className="hud-surface min-h-full flex flex-col">
+        <NavBar />
+        {children}
+      </body>
     </html>
   );
 }

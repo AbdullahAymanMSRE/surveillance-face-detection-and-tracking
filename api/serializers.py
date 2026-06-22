@@ -1,3 +1,4 @@
+from datetime import timezone
 from typing import Optional
 
 from .models import Camera, Person, Sighting
@@ -18,7 +19,16 @@ def person_response(person: Person) -> dict:
 
 
 def _iso(value) -> Optional[str]:
-    return value.isoformat() if value is not None else None
+    """ISO string with an explicit UTC marker.
+
+    Timestamps are stored as naive UTC (datetime.utcnow); without a tz suffix a
+    browser would parse them as local time and show wrong relative/clock values.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat()
 
 
 def sighting_response(sighting: Sighting, camera: Optional[Camera]) -> dict:
