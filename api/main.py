@@ -9,7 +9,8 @@ from . import db
 from .gallery import get_gallery
 from .models import FaceEmbedding
 from .reaper import start_reaper
-from .routers import enroll, people, sightings
+from .routers import cameras, enroll, people, sightings
+from .supervisor import get_supervisor
 
 app = FastAPI(title="Face Dashboard API")
 
@@ -34,6 +35,16 @@ def on_startup() -> None:
             interval_secs=float(os.environ.get("FACE_API_REAPER_INTERVAL", "5")),
             timeout_secs=float(os.environ.get("FACE_API_REAPER_TIMEOUT", "15")),
         )
+    # Supervisor spawns a worker per enabled camera; disabled under tests.
+    if os.environ.get("FACE_API_ENABLE_SUPERVISOR", "1") == "1":
+        get_supervisor().start_monitor(
+            interval=float(os.environ.get("FACE_API_SUPERVISOR_INTERVAL", "5")),
+        )
+
+
+@app.on_event("shutdown")
+def on_shutdown() -> None:
+    get_supervisor().shutdown()
 
 
 @app.get("/health")
@@ -44,3 +55,4 @@ def health() -> dict:
 app.include_router(people.router)
 app.include_router(enroll.router)
 app.include_router(sightings.router)
+app.include_router(cameras.router)
