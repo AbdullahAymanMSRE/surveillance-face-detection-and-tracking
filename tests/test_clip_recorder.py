@@ -47,3 +47,29 @@ def test_encode_writes_a_playable_file(tmp_path):
 def test_encode_empty_returns_false(tmp_path):
     r = ClipRecorder()
     assert r.encode(str(tmp_path / "x.mp4")) is False
+
+
+def test_box_label_draws_green_overlay():
+    r = ClipRecorder(max_frames=5, fps=10, width=640)
+    frame = np.full((720, 1280, 3), 127, dtype=np.uint8)  # plain gray, will downscale
+    r.maybe_add(frame, now=0.0, box=(100, 100, 300, 400), label="person_001")
+    out = r._frames[0]
+    assert out.shape[1] == 640                 # downscaled
+    assert not np.all(out == 127)              # overlay changed pixels
+    assert bool((out[:, :, 1] == 255).any())   # a pure-green pixel exists (the box)
+
+
+def test_box_does_not_mutate_input_frame():
+    r = ClipRecorder(max_frames=5, fps=10, width=640)
+    # width == 640 so _downscale returns the same array; annotation must copy.
+    frame = np.full((360, 640, 3), 127, dtype=np.uint8)
+    r.maybe_add(frame, now=0.0, box=(10, 10, 100, 100), label="x")
+    assert np.all(frame == 127)                # caller's frame untouched
+
+
+def test_none_box_still_buffers_plain_frame():
+    r = ClipRecorder(max_frames=5, fps=10, width=640)
+    frame = np.full((720, 1280, 3), 127, dtype=np.uint8)
+    r.maybe_add(frame, now=0.0, box=None, label=None)
+    assert r.frame_count == 1
+    assert np.all(r._frames[0] == 127)         # nothing drawn
