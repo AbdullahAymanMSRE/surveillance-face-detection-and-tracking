@@ -9,6 +9,7 @@ export type Sighting = {
   endedAt: string | null;
   lastSeen: string | null;
   active: boolean;
+  hasClip: boolean;
 };
 
 export type PersonSummary = {
@@ -54,6 +55,10 @@ export function thumbnailUrl(personId: number): string {
 
 export function previewUrl(cameraId: number): string {
   return absUrl(`/cameras/${cameraId}/preview`);
+}
+
+export function clipUrl(sightingId: number): string {
+  return absUrl(`/sightings/${sightingId}/clip`);
 }
 
 async function getJSON<T>(path: string): Promise<T> {
