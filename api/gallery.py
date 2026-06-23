@@ -196,14 +196,21 @@ class QdrantGallery:
 # two cameras can interleave. Callers wrap match -> (create) -> add in
 # ``match_create_lock`` so a brand-new face seen by two cameras at once yields
 # exactly one person.
-_gallery: Optional[InMemoryGallery] = None
+_gallery: Optional[QdrantGallery] = None
 match_create_lock = threading.Lock()
 
 
-def get_gallery() -> InMemoryGallery:
+def _make_client() -> QdrantClient:
+    url = os.environ.get("QDRANT_URL", "http://localhost:6333")
+    if url == ":memory:":
+        return QdrantClient(location=":memory:")
+    return QdrantClient(url=url)
+
+
+def get_gallery() -> QdrantGallery:
     global _gallery
     if _gallery is None:
-        _gallery = InMemoryGallery()
+        _gallery = QdrantGallery(_make_client())
     return _gallery
 
 
