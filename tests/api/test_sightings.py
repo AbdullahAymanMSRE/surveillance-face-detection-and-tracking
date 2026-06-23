@@ -154,3 +154,10 @@ def test_clip_upload_rejects_oversized(client):
     resp = client.post(f"/sightings/{sighting_id}/clip",
                        files={"clip": ("big.mp4", too_big, "video/mp4")})
     assert resp.status_code == 413
+
+
+def test_open_sighting_returns_display_name(client):
+    cam_id = _make_camera()
+    body = _open(client, cam_id, _emb(1)).json()
+    # A freshly created anonymous person has no label -> person_NNN.
+    assert body["displayName"] == f"person_{body['personId']:03d}"

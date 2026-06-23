@@ -24,7 +24,7 @@ from sqlmodel import select
 from ..db import get_session, get_thumbnails_dir, get_clips_dir
 from ..gallery import get_gallery, match_create_lock
 from ..models import Camera, Person, Sighting
-from ..serializers import person_response, sighting_response
+from ..serializers import display_name, person_response, sighting_response
 
 router = APIRouter()
 
@@ -130,7 +130,8 @@ def open_sighting(
         _save_thumbnail(person_id, thumb)
 
     return {"personId": person_id, "sightingId": sighting_id,
-            "score": score, "isNew": is_new}
+            "score": score, "isNew": is_new,
+            "displayName": display_name(person)}
 
 
 @router.post("/sightings/{sighting_id}/heartbeat")
