@@ -57,7 +57,7 @@ class ClipRecorder:
             by1, by2 = y1, y1 + bar_h
         cv2.rectangle(img, (x1, by1), (x1 + tw + 8, by2), (0, 255, 0), -1)
         cv2.putText(img, label, (x1 + 4, by2 - base - 3),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
 
     def encode(self, path: str) -> bool:
         if not self._frames:

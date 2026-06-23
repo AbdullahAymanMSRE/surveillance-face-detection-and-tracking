@@ -15,6 +15,7 @@ preview port is reserved for the on-demand MJPEG preview added in a later phase.
 import argparse
 import http.server
 import os
+import signal
 import sys
 import threading
 import time
@@ -34,6 +35,19 @@ from pipeline.clip import ClipRecorder
 # How long a track may be absent before we close its visit. Larger than the
 # tracker's max_age debounce so a brief detection dropout doesn't end a visit.
 END_GRACE_SECS = 2.0
+
+
+def _install_sigterm_handler() -> None:
+    """Turn SIGTERM into a KeyboardInterrupt so the main loop's ``finally`` runs.
+
+    The supervisor stops a worker with ``proc.terminate()`` (SIGTERM). By default
+    SIGTERM kills the process immediately, skipping the ``finally`` block — so any
+    in-flight visit clip would be dropped and the visit left open for the reaper.
+    Raising here lets the existing cleanup upload pending clips and end visits
+    before the worker exits (the supervisor waits up to 5s before SIGKILL)."""
+    def _raise(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, _raise)
 CLIP_SECS = 5.0
 CLIP_FPS = 10
 CLIP_WIDTH = 640
@@ -231,6 +245,7 @@ def main() -> int:
         finally:
             os.unlink(tmp.name)
 
+    _install_sigterm_handler()  # graceful stop: upload pending clips, end visits
     print("[node] running", flush=True)
     try:
         while True:
@@ -282,6 +297,8 @@ def main() -> int:
 
             if args.max_seconds and (now - started) > args.max_seconds:
                 break
+    except KeyboardInterrupt:
+        print("[node] received stop signal; flushing clips", flush=True)
     finally:
         for tid, sid in list(open_sightings.items()):
             rec = recorders.pop(tid, None)
