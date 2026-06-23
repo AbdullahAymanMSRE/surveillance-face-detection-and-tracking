@@ -115,3 +115,14 @@ def test_reaper_closes_stale_open_sighting(session):
         select(Sighting).where(Sighting.ended_at == None)  # noqa: E711
     ).all()
     assert len(open_rows) == 1  # only the fresh one remains open
+
+
+def test_sighting_response_includes_clip_fields():
+    from api.models import Sighting
+    from api.serializers import sighting_response
+    s = Sighting(id=5, person_id=1, camera_id=1, has_clip=True)
+    body = sighting_response(s, None)
+    assert body["hasClip"] is True
+    assert body["clipUrl"] == "/sightings/5/clip"
+    s2 = Sighting(id=6, person_id=1, camera_id=1, has_clip=False)
+    assert sighting_response(s2, None)["clipUrl"] is None

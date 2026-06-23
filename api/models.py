@@ -45,3 +45,4 @@ class Sighting(SQLModel, table=True):
     last_seen: datetime = Field(default_factory=datetime.utcnow)
     ended_at: Optional[datetime] = Field(default=None)
     best_sharpness: float = -1.0
+    has_clip: bool = False

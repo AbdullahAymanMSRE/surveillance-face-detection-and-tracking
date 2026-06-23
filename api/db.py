@@ -22,6 +22,10 @@ def get_thumbnails_dir() -> Path:
     return get_data_dir() / "thumbnails"
 
 
+def get_clips_dir() -> Path:
+    return get_data_dir() / "clips"
+
+
 def get_engine():
     global _engine
     if _engine is None:
