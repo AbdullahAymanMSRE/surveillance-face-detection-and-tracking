@@ -9,9 +9,9 @@ same face, but nothing retroactively joins them.
 This pass closes that gap: it compares every pair of persons by their best
 cross-exemplar cosine similarity and merges any pair above ``merge_threshold``
 (transitively, so A~B~C collapse into one). The surviving person keeps the most
-visits and the sharpest thumbnail; the others' sightings and embeddings are
-reassigned to it and the emptied persons are deleted. The in-memory gallery is
-rebuilt from the database afterwards.
+visits and the sharpest thumbnail; the others' sightings are reassigned to it,
+their gallery embeddings are repointed to it in Qdrant, and the emptied persons
+are deleted.
 """
 
 from pathlib import Path
