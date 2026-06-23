@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 from typing import Iterator
 
+from sqlalchemy import inspect, text
 from sqlmodel import Session, SQLModel, create_engine
 
 _engine = None
@@ -42,9 +43,30 @@ def reset_engine() -> None:
     _engine = None
 
 
+def _ensure_columns(engine) -> None:
+    """Add columns introduced after a database was first created.
+
+    ``SQLModel.metadata.create_all`` only creates missing *tables*; it never
+    alters an existing one. A database created before a column was added would
+    therefore lack it, and any query selecting it fails. SQLite supports a cheap
+    ``ALTER TABLE ... ADD COLUMN``; apply the known additions idempotently so an
+    older ``app.db`` self-heals on startup."""
+    inspector = inspect(engine)
+    if "sighting" not in inspector.get_table_names():
+        return
+    sighting_cols = {c["name"] for c in inspector.get_columns("sighting")}
+    if "has_clip" not in sighting_cols:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE sighting ADD COLUMN has_clip BOOLEAN NOT NULL "
+                "DEFAULT 0"))
+
+
 def init_db() -> None:
     from . import models  # noqa: F401  (registers tables on SQLModel.metadata)
-    SQLModel.metadata.create_all(get_engine())
+    engine = get_engine()
+    SQLModel.metadata.create_all(engine)
+    _ensure_columns(engine)
 
 
 def get_session() -> Iterator[Session]:
