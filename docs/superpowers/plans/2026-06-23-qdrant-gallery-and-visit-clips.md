@@ -154,7 +154,7 @@ class GalleryMatcher(Protocol):
         ...
 ```
 
-Add the new class below `InMemoryGallery` (keep `InMemoryGallery` for now — removed implicitly by being unused; do not delete in this task):
+Add the new class below `InMemoryGallery` (keep `InMemoryGallery` for now — it and its unit tests `tests/api/test_gallery.py` are removed in Task 5; do not delete in this task):
 
 ```python
 class QdrantGallery:
@@ -341,11 +341,12 @@ git commit -m "feat(gallery): make Qdrant the process gallery; tests use in-memo
 
 **Files:**
 - Modify: `api/routers/sightings.py`
-- Test: `tests/api/test_sightings.py`, `tests/api/test_gallery.py` (update assertions)
 
 **Interfaces:**
 - Consumes: `get_gallery().add/match/count_for_person/best_for_person` (Tasks 1–2).
-- Produces: `_maybe_add_exemplar(session, person_id, vec, sharpness)` — `emb_bytes` parameter removed; embeddings now go only to the gallery.
+- Produces: `_maybe_add_exemplar(person_id, vec, sharpness)` — `session` and `emb_bytes` parameters removed; embeddings now go only to the gallery.
+
+**Note on tests:** No test file counts `FaceEmbedding` rows for the ingestion path — `test_sightings.py` asserts behavior through the API, so it stays green unchanged. Only `tests/api/test_search.py` inserts `FaceEmbedding`, and it keeps working until Task 5 (the model still exists). Do not edit tests in this task; just confirm the suite is green.
 
 - [ ] **Step 1: Update `_maybe_add_exemplar`**
 
@@ -411,29 +412,15 @@ Change the models import to drop `FaceEmbedding`:
 from ..models import Camera, Person, Sighting
 ```
 
-- [ ] **Step 5: Update existing tests that count FaceEmbedding rows**
+- [ ] **Step 5: Run the affected suites (no test edits expected)**
 
-Open `tests/api/test_sightings.py` and `tests/api/test_gallery.py`. Anywhere a test queries the DB for `FaceEmbedding` rows (e.g. `session.exec(select(FaceEmbedding))` or counts exemplars via the table), replace the assertion with the gallery view:
+Run: `.venv/bin/python -m pytest tests/api/test_sightings.py tests/api/test_gallery.py tests/api/test_search.py -q`
+Expected: PASS unchanged. `test_sightings.py` exercises the API and does not inspect `FaceEmbedding`; `test_search.py` still inserts `FaceEmbedding` (the model exists until Task 5) and still passes. If any assertion genuinely depends on the removed insert, stop and report — do not invent test changes here.
 
-```python
-from api.gallery import get_gallery
-# exemplar count for a person:
-assert get_gallery().count_for_person(person_id) == EXPECTED
-# total gallery size:
-assert len(get_gallery()) == EXPECTED_TOTAL
-```
-
-Remove now-unused `FaceEmbedding` imports from those test files.
-
-- [ ] **Step 6: Run the affected suites**
-
-Run: `.venv/bin/python -m pytest tests/api/test_sightings.py tests/api/test_gallery.py -q`
-Expected: PASS. If a test still references `FaceEmbedding`, convert it as in Step 5.
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add api/routers/sightings.py tests/api/test_sightings.py tests/api/test_gallery.py
+git add api/routers/sightings.py
 git commit -m "refactor(sightings): store embeddings only in Qdrant, not FaceEmbedding"
 ```
 
@@ -443,7 +430,7 @@ git commit -m "refactor(sightings): store embeddings only in Qdrant, not FaceEmb
 
 **Files:**
 - Modify: `api/consolidate.py`
-- Test: `tests/api/` consolidation test (the test exercising `consolidate_identities`; update fixtures to add embeddings via `get_gallery().add`)
+- Create: `tests/api/test_consolidate.py` (no consolidation test exists yet — add one)
 
 **Interfaces:**
 - Consumes: `QdrantGallery.all_vectors_by_person()`, `reassign_person()` (Task 1).
@@ -501,54 +488,137 @@ with:
     return removed
 ```
 
-- [ ] **Step 2: Update the consolidation test fixtures**
+- [ ] **Step 2: Add a consolidation test (seeded via the gallery)**
 
-Find the test that calls `consolidate_identities` (search: `.venv/bin/python -m pytest -q -k consolidat --co`). Wherever it seeds embeddings by inserting `FaceEmbedding` rows, seed them via the gallery instead:
+Create `tests/api/test_consolidate.py`. It seeds two persons whose exemplars are similar enough to merge (cross cosine ≥ 0.35), runs `consolidate_identities`, and asserts the loser's person row is gone and its vectors were reassigned. The `client` fixture wires the in-memory Qdrant gallery and a temp DB.
 
 ```python
+import numpy as np
+from sqlmodel import Session, select
+
+from api.consolidate import consolidate_identities
+from api.db import get_engine
 from api.gallery import get_gallery
-get_gallery().add(person_id, vector)   # vector: np.float32 512-d, L2-normalized
+from api.models import Person, Sighting
+
+
+def _unit(v: np.ndarray) -> np.ndarray:
+    return (v / np.linalg.norm(v)).astype(np.float32)
+
+
+def test_consolidate_merges_similar_persons(client):
+    gallery = get_gallery()
+    base = np.zeros(512, dtype=np.float32)
+    base[0] = 1.0
+    near = base.copy()
+    near[1] = 0.5  # cosine with base ~0.89, well above MERGE_THRESHOLD (0.35)
+
+    with Session(get_engine()) as s:
+        p1, p2 = Person(), Person()
+        s.add(p1); s.add(p2); s.commit(); s.refresh(p1); s.refresh(p2)
+        id1, id2 = p1.id, p2.id
+        # p1 has more visits -> it is the survivor
+        s.add(Sighting(person_id=id1, camera_id=1))
+        s.add(Sighting(person_id=id1, camera_id=1))
+        s.add(Sighting(person_id=id2, camera_id=1))
+        s.commit()
+
+    gallery.add(id1, _unit(base))
+    gallery.add(id2, _unit(near))
+
+    with Session(get_engine()) as s:
+        removed = consolidate_identities(s)
+
+    assert removed == 1
+    with Session(get_engine()) as s:
+        remaining = {p.id for p in s.exec(select(Person)).all()}
+    assert remaining == {id1}
+    # both vectors now belong to the survivor
+    assert gallery.count_for_person(id1) == 2
+    assert gallery.count_for_person(id2) == 0
 ```
 
-Remove `FaceEmbedding` imports from that test.
+- [ ] **Step 3: Run the consolidation test**
 
-- [ ] **Step 3: Run consolidation tests**
-
-Run: `.venv/bin/python -m pytest tests/api -q -k consolidat`
-Expected: PASS.
+Run: `.venv/bin/python -m pytest tests/api/test_consolidate.py -q`
+Expected: PASS. (Write this test first and watch it fail against the old `FaceEmbedding`-based `consolidate.py` before applying Step 1, per TDD; if you apply Step 1 first, it should pass directly.)
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add api/consolidate.py tests/api
+git add api/consolidate.py tests/api/test_consolidate.py
 git commit -m "refactor(consolidate): merge identities via Qdrant payload reassignment"
 ```
 
 ---
 
-## Task 5: Remove FaceEmbedding model + dead matcher; add migration
+## Task 5: Remove FaceEmbedding model, InMemoryGallery, dead matcher; add migration
 
 **Files:**
 - Modify: `api/models.py` (remove `FaceEmbedding`)
-- Delete: `api/matching.py`
+- Modify: `api/gallery.py` (remove `InMemoryGallery`)
+- Modify: `tests/api/test_search.py` (seed via gallery, count gallery not table)
+- Delete: `api/matching.py`, `tests/api/test_gallery.py`
 - Create: `scripts/migrate_to_qdrant.py`
 
 **Interfaces:**
 - Consumes: `get_gallery().add` (Task 1).
-- Produces: a runnable one-time migration `scripts/migrate_to_qdrant.py`.
+- Produces: a runnable one-time migration `scripts/migrate_to_qdrant.py`. After this task the only `GalleryMatcher` implementation is `QdrantGallery`; the `GalleryMatcher` Protocol stays.
 
-- [ ] **Step 1: Verify no remaining references**
+- [ ] **Step 1: Update `tests/api/test_search.py` to drop FaceEmbedding**
 
-Run: `grep -rn "FaceEmbedding\|find_best_match\|matching" api/ tests/ --include=*.py | grep -v test_qdrant`
-Expected: only the definition lines in `api/models.py` and `api/matching.py` remain (no consumers). If any consumer remains, fix it before continuing.
+In `tests/api/test_search.py`, change the import to drop `FaceEmbedding`:
 
-- [ ] **Step 2: Remove the model and dead code**
+```python
+from api.models import Person
+```
 
-In `api/models.py`, delete the entire `FaceEmbedding` class (lines defining it). In any file still importing it, remove the import. Delete the dead matcher:
+In `_seed_person_from_image`, remove the `FaceEmbedding` insert (keep the `Person` row and the `get_gallery().add`):
+
+```python
+def _seed_person_from_image(image_bytes: bytes) -> int:
+    """Enroll a real face into DB + gallery the way the pipeline would."""
+    frame = ml.decode_image(image_bytes)
+    vector_bytes, _crop, sharpness = ml.detect_and_embed(frame)
+    with Session(get_engine()) as s:
+        person = Person(best_sharpness=sharpness)
+        s.add(person)
+        s.commit()
+        s.refresh(person)
+        person_id = person.id
+    get_gallery().add(person_id, np.frombuffer(vector_bytes, dtype=np.float32))
+    return person_id
+```
+
+In `test_search_does_not_write`, count gallery points instead of `FaceEmbedding` rows:
+
+```python
+def test_search_does_not_write(client, face_known_1_bytes):
+    _seed_person_from_image(face_known_1_bytes)
+    gallery = get_gallery()
+    with Session(get_engine()) as s:
+        persons_before = len(s.exec(select(Person)).all())
+    embeds_before = len(gallery)
+
+    client.post("/search", files={"image": ("x.jpg", face_known_1_bytes, "image/jpeg")})
+
+    with Session(get_engine()) as s:
+        assert len(s.exec(select(Person)).all()) == persons_before
+    assert len(gallery) == embeds_before
+```
+
+- [ ] **Step 2: Remove the model, InMemoryGallery, and dead code**
+
+In `api/models.py`, delete the entire `FaceEmbedding` class. In `api/gallery.py`, delete the entire `InMemoryGallery` class (keep `_normalize`, the `GalleryMatcher` Protocol, `QdrantGallery`, and the singleton block). Remove any now-unused imports. Delete the dead matcher and the InMemoryGallery unit tests:
 
 ```bash
-git rm api/matching.py
+git rm api/matching.py tests/api/test_gallery.py
 ```
+
+Then verify nothing still references the removed names:
+
+Run: `grep -rn "FaceEmbedding\|InMemoryGallery\|find_best_match" api/ tests/ --include=*.py`
+Expected: no output (zero references remain).
 
 - [ ] **Step 3: Add the migration script**
 
@@ -609,9 +679,9 @@ Expected: PASS (all tests green; `FaceEmbedding` fully gone).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add api/models.py scripts/migrate_to_qdrant.py
-git rm api/matching.py
-git commit -m "refactor: remove FaceEmbedding model and dead matcher; add Qdrant migration"
+git add api/models.py api/gallery.py tests/api/test_search.py scripts/migrate_to_qdrant.py
+git rm api/matching.py tests/api/test_gallery.py
+git commit -m "refactor: remove FaceEmbedding, InMemoryGallery, dead matcher; add Qdrant migration"
 ```
 
 ---
@@ -1185,7 +1255,8 @@ git commit -m "feat(web): show per-visit clip on the person timeline"
 ## Self-Review (completed by plan author)
 
 **Spec coverage:**
-- Qdrant `QdrantGallery` + protocol → Task 1. Singleton/startup → Task 2. Ingestion stops writing `FaceEmbedding` → Task 3. Consolidation via Qdrant → Task 4. Remove `FaceEmbedding`/`matching.py` + migration → Task 5. Docker/Makefile/README/`QDRANT_URL` → Task 6.
+- Qdrant `QdrantGallery` + protocol → Task 1. Singleton/startup → Task 2. Ingestion stops writing `FaceEmbedding` → Task 3. Consolidation via Qdrant (+ new `test_consolidate.py`) → Task 4. Remove `FaceEmbedding` + `InMemoryGallery` + `matching.py` + delete `test_gallery.py` + update `test_search.py` + migration → Task 5. Docker/Makefile/README/`QDRANT_URL` → Task 6.
+- **Pre-flight resolutions (user-approved):** `InMemoryGallery` and its `test_gallery.py` are removed in Task 5 (single authoritative matcher). No consolidation test existed, so Task 4 adds one. Only `test_search.py` referenced `FaceEmbedding`; it is updated in Task 5.
 - Clips: `has_clip`/clips dir/serializer → Task 7. Upload+serve endpoints (range via `FileResponse`) → Task 8. Worker `ClipRecorder` (≤5s/10fps/640px, `avc1`→`mp4v`, upload on end) → Task 9. Person-timeline `<video>` → Task 10.
 - Risks (hard Qdrant dependency, codec fallback, storage growth, `match_create_lock` retained) reflected in Global Constraints / Task 9 Step 4 / Task 8 size cap.
 
