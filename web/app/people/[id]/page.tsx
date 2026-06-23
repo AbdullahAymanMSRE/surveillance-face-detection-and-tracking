@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { getPerson, thumbnailUrl, updateLabel } from "@/lib/api";
+import { getPerson, thumbnailUrl, updateLabel, clipUrl } from "@/lib/api";
 import { usePoll } from "@/lib/usePoll";
 import { fmtDate, fmtSpan, fmtRelative } from "@/lib/format";
 import { CornerBrackets } from "@/components/CornerBrackets";
@@ -103,6 +103,14 @@ export default function PersonDetailPage() {
               <span className={`text-xs tabular-nums ${s.active ? "text-green" : "text-ink"}`}>
                 {fmtSpan(s.startedAt, s.endedAt)}
               </span>
+              {s.hasClip && (
+                <video
+                  controls
+                  preload="none"
+                  src={clipUrl(s.id)}
+                  className="mt-2 w-full max-w-md rounded border border-edge"
+                />
+              )}
             </li>
           ))}
         </ul>

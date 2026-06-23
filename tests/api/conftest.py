@@ -15,6 +15,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("FACE_API_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("FACE_API_ENABLE_REAPER", "0")
     monkeypatch.setenv("FACE_API_ENABLE_SUPERVISOR", "0")
+    monkeypatch.setenv("QDRANT_URL", ":memory:")
     db.reset_engine()
     gallery.reset_gallery()
     supervisor.reset_supervisor()

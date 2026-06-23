@@ -16,14 +16,15 @@ from typing import Optional
 
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sqlmodel import Session
 
 from sqlmodel import select
 
-from ..db import get_session, get_thumbnails_dir
+from ..db import get_session, get_thumbnails_dir, get_clips_dir
 from ..gallery import get_gallery, match_create_lock
-from ..models import Camera, FaceEmbedding, Person, Sighting
-from ..serializers import person_response, sighting_response
+from ..models import Camera, Person, Sighting
+from ..serializers import display_name, person_response, sighting_response
 
 router = APIRouter()
 
@@ -32,13 +33,14 @@ router = APIRouter()
 # track every heartbeat is already bound to that track's person, so as the head
 # turns we capture the new pose under the *same* identity — which is what keeps a
 # side profile from spawning its own person.
+MAX_CLIP_BYTES = 20 * 1024 * 1024  # 20 MB ceiling per visit clip
+
 EXEMPLAR_MAX = 12            # cap exemplars per person (bounds the gallery)
 EXEMPLAR_NOVELTY = 0.50      # only store a frame whose pose isn't already covered
 EXEMPLAR_MIN_SHARPNESS = 60.0  # never enroll a blurry crop as a reference
 
 
-def _maybe_add_exemplar(session: Session, person_id: int, emb_bytes: bytes,
-                        vec: np.ndarray, sharpness: float) -> None:
+def _maybe_add_exemplar(person_id: int, vec: np.ndarray, sharpness: float) -> None:
     """Store ``vec`` as a new pose exemplar for ``person_id`` when it is sharp,
     genuinely novel, and the per-person cap isn't reached."""
     if sharpness < EXEMPLAR_MIN_SHARPNESS:
@@ -48,8 +50,6 @@ def _maybe_add_exemplar(session: Session, person_id: int, emb_bytes: bytes,
         return
     if gallery.best_for_person(person_id, vec) >= EXEMPLAR_NOVELTY:
         return  # this pose is already well represented
-    session.add(FaceEmbedding(person_id=person_id, vector=emb_bytes))
-    session.commit()
     gallery.add(person_id, vec)
 
 
@@ -106,8 +106,6 @@ def open_sighting(
             session.commit()
             session.refresh(person)
             person_id = person.id
-            session.add(FaceEmbedding(person_id=person_id, vector=emb_bytes))
-            session.commit()
             gallery.add(person_id, vec)
             if crop_bytes:
                 thumb = crop_bytes
@@ -119,7 +117,7 @@ def open_sighting(
                 session.commit()
                 thumb = crop_bytes
             # Re-matched an existing identity: capture this pose if it's new.
-            _maybe_add_exemplar(session, person_id, emb_bytes, vec, sharpness)
+            _maybe_add_exemplar(person_id, vec, sharpness)
 
         sighting = Sighting(person_id=person_id, camera_id=camera_id,
                             best_sharpness=sharpness)
@@ -132,7 +130,8 @@ def open_sighting(
         _save_thumbnail(person_id, thumb)
 
     return {"personId": person_id, "sightingId": sighting_id,
-            "score": score, "isNew": is_new}
+            "score": score, "isNew": is_new,
+            "displayName": display_name(person)}
 
 
 @router.post("/sightings/{sighting_id}/heartbeat")
@@ -166,7 +165,7 @@ def heartbeat(
         emb_bytes = embedding.file.read()
         vec = np.frombuffer(emb_bytes, dtype=np.float32)
         if vec.size:
-            _maybe_add_exemplar(session, sighting.person_id, emb_bytes, vec, sharpness)
+            _maybe_add_exemplar(sighting.person_id, vec, sharpness)
     if thumb is not None:
         _save_thumbnail(*thumb)
     return {"ok": True}
@@ -182,3 +181,32 @@ def end_sighting(sighting_id: int, session: Session = Depends(get_session)):
         session.add(sighting)
         session.commit()
     return {"ok": True}
+
+
+@router.post("/sightings/{sighting_id}/clip")
+def upload_clip(
+    sighting_id: int,
+    clip: UploadFile = File(...),
+    session: Session = Depends(get_session),
+):
+    sighting = session.get(Sighting, sighting_id)
+    if sighting is None:
+        raise HTTPException(404, detail="Sighting not found")
+    data = clip.file.read()
+    if len(data) > MAX_CLIP_BYTES:
+        raise HTTPException(413, detail="Clip too large")
+    clips = get_clips_dir()
+    clips.mkdir(parents=True, exist_ok=True)
+    (clips / f"{sighting_id}.mp4").write_bytes(data)
+    sighting.has_clip = True
+    session.add(sighting)
+    session.commit()
+    return {"ok": True}
+
+
+@router.get("/sightings/{sighting_id}/clip")
+def get_clip(sighting_id: int):
+    path = get_clips_dir() / f"{sighting_id}.mp4"
+    if not path.exists():
+        raise HTTPException(404, detail="No clip for this sighting")
+    return FileResponse(path, media_type="video/mp4")

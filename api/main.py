@@ -3,11 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import os
 
-from sqlmodel import Session, select
-
 from . import db
 from .gallery import get_gallery
-from .models import FaceEmbedding
 from .reaper import start_reaper
 from .routers import cameras, people, sightings
 from .supervisor import get_supervisor
@@ -25,10 +22,9 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup() -> None:
     db.init_db()
-    # Build the in-memory matching gallery from the persisted embeddings.
-    with Session(db.get_engine()) as session:
-        rows = session.exec(select(FaceEmbedding)).all()
-        get_gallery().load((row.person_id, row.vector) for row in rows)
+    # Connect to Qdrant and ensure the 'faces' collection exists. Qdrant is the
+    # authoritative embedding store, so there is nothing to rebuild from SQLite.
+    get_gallery()
     # Reaper closes orphaned open sightings; disabled under tests.
     if os.environ.get("FACE_API_ENABLE_REAPER", "1") == "1":
         start_reaper(

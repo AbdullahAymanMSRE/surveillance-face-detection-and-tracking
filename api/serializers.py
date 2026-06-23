@@ -41,4 +41,6 @@ def sighting_response(sighting: Sighting, camera: Optional[Camera]) -> dict:
         "endedAt": _iso(sighting.ended_at),
         "lastSeen": _iso(sighting.last_seen),
         "active": sighting.ended_at is None,
+        "hasClip": sighting.has_clip,
+        "clipUrl": f"/sightings/{sighting.id}/clip" if sighting.has_clip else None,
     }

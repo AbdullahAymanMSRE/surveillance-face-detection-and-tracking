@@ -115,3 +115,49 @@ def test_reaper_closes_stale_open_sighting(session):
         select(Sighting).where(Sighting.ended_at == None)  # noqa: E711
     ).all()
     assert len(open_rows) == 1  # only the fresh one remains open
+
+
+def test_sighting_response_includes_clip_fields():
+    from api.models import Sighting
+    from api.serializers import sighting_response
+    s = Sighting(id=5, person_id=1, camera_id=1, has_clip=True)
+    body = sighting_response(s, None)
+    assert body["hasClip"] is True
+    assert body["clipUrl"] == "/sightings/5/clip"
+    s2 = Sighting(id=6, person_id=1, camera_id=1, has_clip=False)
+    assert sighting_response(s2, None)["clipUrl"] is None
+
+
+def test_clip_upload_and_download(client):
+    cam_id = _make_camera()
+    resp = _open(client, cam_id, _emb(1))
+    sighting_id = resp.json()["sightingId"]
+
+    fake_mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64
+    up = client.post(f"/sightings/{sighting_id}/clip",
+                     files={"clip": ("v.mp4", fake_mp4, "video/mp4")})
+    assert up.status_code == 200
+
+    got = client.get(f"/sightings/{sighting_id}/clip")
+    assert got.status_code == 200
+    assert got.headers["content-type"] == "video/mp4"
+    assert got.content == fake_mp4
+
+    assert client.get("/sightings/999999/clip").status_code == 404
+
+
+def test_clip_upload_rejects_oversized(client):
+    cam_id = _make_camera()
+    sighting_id = _open(client, cam_id, _emb(1)).json()["sightingId"]
+    # one byte over the 20 MB ceiling
+    too_big = b"\x00" * (20 * 1024 * 1024 + 1)
+    resp = client.post(f"/sightings/{sighting_id}/clip",
+                       files={"clip": ("big.mp4", too_big, "video/mp4")})
+    assert resp.status_code == 413
+
+
+def test_open_sighting_returns_display_name(client):
+    cam_id = _make_camera()
+    body = _open(client, cam_id, _emb(1)).json()
+    # A freshly created anonymous person has no label -> person_NNN.
+    assert body["displayName"] == f"person_{body['personId']:03d}"

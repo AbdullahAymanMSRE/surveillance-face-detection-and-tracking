@@ -56,6 +56,7 @@ make install                       # venv + Python deps + web deps  (one time)
 Then in two terminals (from the repo root):
 
 ```bash
+make qdrant                        # start the Qdrant vector store (Docker)
 make api                           # FastAPI backend + supervisor on :8000
 make web                           # Next.js dashboard on :3000
 ```
@@ -134,7 +135,8 @@ make web           # dashboard (set API_URL=... to point elsewhere)
 
 Key environment variables: `FACE_API_DATA_DIR` (SQLite + thumbnails location),
 `FACE_API_SELF_URL` (URL workers use to reach the API), `NEXT_PUBLIC_API_URL`
-(dashboard → API base URL; see `web/.env.local.example`).
+(dashboard → API base URL; see `web/.env.local.example`),
+`QDRANT_URL` (vector store; default `http://localhost:6333`, `:memory:` for tests).
 
 The standalone local-debug viewer (single webcam, on-screen window, no server)
 is still available:
@@ -147,9 +149,9 @@ python live_pipeline.py
 
 ## Future work
 
-Authentication/roles; an annotated (boxes + labels) preview tab; a vector-DB
-implementation of the `GalleryMatcher` interface for very large galleries;
-server-push (SSE) instead of polling; containerized deployment.
+Authentication/roles; an annotated (boxes + labels) preview tab; server-push
+(SSE) instead of polling; containerized deployment. (The vector-DB
+`GalleryMatcher` backed by Qdrant is now implemented — see `api/gallery.py`.)
 
 ---
 
