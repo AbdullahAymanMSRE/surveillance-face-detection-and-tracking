@@ -21,23 +21,13 @@ from sqlmodel import Session, select
 
 from .db import get_thumbnails_dir
 from .gallery import get_gallery
-from .models import FaceEmbedding, Person, Sighting
+from .models import Person, Sighting
 
 # Cosine at/above which two identities are judged the same face. Sits in the
 # empirical gap between different people (cross-identity ArcFace cosine ~0.05-0.1)
 # and the same person across pose (frontal-vs-profile ~0.40), above the live
 # match threshold (0.28) so merging stays more conservative than live matching.
 MERGE_THRESHOLD = 0.35
-
-
-def _vectors_by_person(session: Session) -> dict:
-    rows = session.exec(select(FaceEmbedding)).all()
-    by_person: dict = {}
-    for r in rows:
-        v = np.frombuffer(r.vector, dtype=np.float32)
-        n = float(np.linalg.norm(v))
-        by_person.setdefault(r.person_id, []).append(v / n if n > 0 else v)
-    return {pid: np.stack(vs) for pid, vs in by_person.items()}
 
 
 def _max_cross_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -47,7 +37,8 @@ def _max_cross_similarity(a: np.ndarray, b: np.ndarray) -> float:
 def consolidate_identities(session: Session,
                            merge_threshold: float = MERGE_THRESHOLD) -> int:
     """Merge same-face persons. Returns how many persons were removed."""
-    mats = _vectors_by_person(session)
+    gallery = get_gallery()
+    mats = gallery.all_vectors_by_person()
     pids = sorted(mats)
     if len(pids) < 2:
         return 0
@@ -94,10 +85,7 @@ def consolidate_identities(session: Session,
                     select(Sighting).where(Sighting.person_id == loser)).all():
                 s.person_id = keeper
                 session.add(s)
-            for e in session.exec(
-                    select(FaceEmbedding).where(FaceEmbedding.person_id == loser)).all():
-                e.person_id = keeper
-                session.add(e)
+            gallery.reassign_person(loser, keeper)
             lose_person = persons[loser]
             # Promote the sharper thumbnail if the loser had a better shot.
             if lose_person.best_sharpness > keep_person.best_sharpness:
@@ -114,6 +102,4 @@ def consolidate_identities(session: Session,
 
     if removed:
         session.commit()
-        rows = session.exec(select(FaceEmbedding)).all()
-        get_gallery().load((r.person_id, r.vector) for r in rows)
     return removed
