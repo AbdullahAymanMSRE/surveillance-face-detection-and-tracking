@@ -19,7 +19,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 import cv2
 import httpx
@@ -185,15 +185,17 @@ def main() -> int:
     open_sightings: Dict[int, int] = {}
     last_present: Dict[int, float] = {}
     recorders: Dict[int, ClipRecorder] = {}
+    clip_names: Dict[int, str] = {}   # track_id -> display name for the clip overlay
     started = time.time()
 
-    def _post_open(ev) -> Optional[int]:
+    def _post_open(ev) -> Optional[Tuple[int, str]]:
         try:
             payload = _encode(ev)
             payload["data"]["camera_id"] = camera_id
             r = client.post(f"{api}/sightings", timeout=10, **payload)
             if r.status_code == 201:
-                return r.json()["sightingId"]
+                body = r.json()
+                return body["sightingId"], body.get("displayName", "")
         except httpx.HTTPError as e:
             print(f"[node] open failed: {e}", flush=True)
         return None
@@ -249,18 +251,20 @@ def main() -> int:
             for tid in track_ids:
                 last_present[tid] = now
 
-            for tid in track_ids:
+            for box, tid in zip(boxes, track_ids):
                 rec = recorders.get(tid)
                 if rec is not None:
-                    rec.maybe_add(frame, now)
+                    rec.maybe_add(frame, now, box=box, label=clip_names.get(tid))
 
             for ev in events:
                 if ev.track_id in open_sightings:
                     _post_heartbeat(open_sightings[ev.track_id], ev)
                 else:
-                    sid = _post_open(ev)
-                    if sid is not None:
+                    opened = _post_open(ev)
+                    if opened is not None:
+                        sid, name = opened
                         open_sightings[ev.track_id] = sid
+                        clip_names[ev.track_id] = name
                         recorders[ev.track_id] = ClipRecorder(
                             max_frames=int(CLIP_SECS * CLIP_FPS),
                             fps=CLIP_FPS, width=CLIP_WIDTH)
@@ -274,6 +278,7 @@ def main() -> int:
                         _post_clip(sid, rec)
                     _post_end(sid)
                     last_present.pop(tid, None)
+                    clip_names.pop(tid, None)
 
             if args.max_seconds and (now - started) > args.max_seconds:
                 break
@@ -283,6 +288,7 @@ def main() -> int:
             if rec is not None:
                 _post_clip(sid, rec)
             _post_end(sid)
+            clip_names.pop(tid, None)
         core.stop()
         cap.release()
         client.close()
