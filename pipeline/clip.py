@@ -50,5 +50,6 @@ class ClipRecorder:
             for f in self._frames:
                 writer.write(f)
             writer.release()
+            print(f"[clip] encoded {len(self._frames)} frames with {fourcc_name} -> {path}", flush=True)
             return True
         return False

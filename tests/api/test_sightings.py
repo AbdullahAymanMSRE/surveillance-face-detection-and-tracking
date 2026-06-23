@@ -144,3 +144,13 @@ def test_clip_upload_and_download(client):
     assert got.content == fake_mp4
 
     assert client.get("/sightings/999999/clip").status_code == 404
+
+
+def test_clip_upload_rejects_oversized(client):
+    cam_id = _make_camera()
+    sighting_id = _open(client, cam_id, _emb(1)).json()["sightingId"]
+    # one byte over the 20 MB ceiling
+    too_big = b"\x00" * (20 * 1024 * 1024 + 1)
+    resp = client.post(f"/sightings/{sighting_id}/clip",
+                       files={"clip": ("big.mp4", too_big, "video/mp4")})
+    assert resp.status_code == 413
