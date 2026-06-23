@@ -29,10 +29,14 @@ _REPO_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(_REPO_ROOT / "face_recognition"))
 
 from pipeline.core import build_arcface_core  # noqa: E402
+from pipeline.clip import ClipRecorder
 
 # How long a track may be absent before we close its visit. Larger than the
 # tracker's max_age debounce so a brief detection dropout doesn't end a visit.
 END_GRACE_SECS = 2.0
+CLIP_SECS = 5.0
+CLIP_FPS = 10
+CLIP_WIDTH = 640
 
 _PREVIEW_BOUNDARY = "frame"
 
@@ -180,6 +184,7 @@ def main() -> int:
     # track_id -> sighting_id (open visits); last time each track was on screen.
     open_sightings: Dict[int, int] = {}
     last_present: Dict[int, float] = {}
+    recorders: Dict[int, ClipRecorder] = {}
     started = time.time()
 
     def _post_open(ev) -> Optional[int]:
@@ -207,6 +212,23 @@ def main() -> int:
         except httpx.HTTPError:
             pass
 
+    def _post_clip(sighting_id: int, recorder: ClipRecorder) -> None:
+        import tempfile, os
+        if recorder.frame_count == 0:
+            return
+        tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+        tmp.close()
+        try:
+            if not recorder.encode(tmp.name):
+                return
+            with open(tmp.name, "rb") as fh:
+                client.post(f"{api}/sightings/{sighting_id}/clip", timeout=30,
+                            files={"clip": ("clip.mp4", fh.read(), "video/mp4")})
+        except (OSError, httpx.HTTPError) as e:
+            print(f"[node] clip upload failed: {e}", flush=True)
+        finally:
+            os.unlink(tmp.name)
+
     print("[node] running", flush=True)
     try:
         while True:
@@ -227,6 +249,11 @@ def main() -> int:
             for tid in track_ids:
                 last_present[tid] = now
 
+            for tid in track_ids:
+                rec = recorders.get(tid)
+                if rec is not None:
+                    rec.maybe_add(frame, now)
+
             for ev in events:
                 if ev.track_id in open_sightings:
                     _post_heartbeat(open_sightings[ev.track_id], ev)
@@ -234,17 +261,27 @@ def main() -> int:
                     sid = _post_open(ev)
                     if sid is not None:
                         open_sightings[ev.track_id] = sid
+                        recorders[ev.track_id] = ClipRecorder(
+                            max_frames=int(CLIP_SECS * CLIP_FPS),
+                            fps=CLIP_FPS, width=CLIP_WIDTH)
 
             # Close visits whose track has been gone past the grace window.
             for tid in list(open_sightings):
                 if now - last_present.get(tid, 0.0) > END_GRACE_SECS:
-                    _post_end(open_sightings.pop(tid))
+                    sid = open_sightings.pop(tid)
+                    rec = recorders.pop(tid, None)
+                    if rec is not None:
+                        _post_clip(sid, rec)
+                    _post_end(sid)
                     last_present.pop(tid, None)
 
             if args.max_seconds and (now - started) > args.max_seconds:
                 break
     finally:
-        for sid in open_sightings.values():
+        for tid, sid in list(open_sightings.items()):
+            rec = recorders.pop(tid, None)
+            if rec is not None:
+                _post_clip(sid, rec)
             _post_end(sid)
         core.stop()
         cap.release()
