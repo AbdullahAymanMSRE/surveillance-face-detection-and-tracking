@@ -7,7 +7,7 @@ PY   := $(VENV)/bin/python
 PIP  := $(VENV)/bin/pip
 API_URL ?= http://localhost:8000
 
-.PHONY: install api web test demo-clips demo-cameras publisher clean-data help
+.PHONY: install api web test demo-clips demo-cameras publisher clean-data qdrant qdrant-stop help
 
 help:
 	@echo "make install       - create venv, install Python + web deps"
@@ -17,6 +17,8 @@ help:
 	@echo "make demo-clips    - generate demo videos from the test face fixtures"
 	@echo "make demo-cameras  - register two demo cameras (API must be running)"
 	@echo "make publisher     - publish a local webcam as MJPEG (SOURCE=0 PORT=8090)"
+	@echo "make qdrant        - start the Qdrant vector DB (Docker, port 6333)"
+	@echo "make qdrant-stop   - stop and remove the Qdrant container"
 
 install:
 	python3 -m venv $(VENV)
@@ -45,6 +47,13 @@ demo-cameras:
 
 publisher:
 	$(PY) publisher.py --source $(or $(SOURCE),0) --port $(or $(PORT),8090)
+
+qdrant:
+	docker run -d --name face-qdrant -p 6333:6333 \
+	  -v $(PWD)/api/data/qdrant:/qdrant/storage qdrant/qdrant
+
+qdrant-stop:
+	-docker rm -f face-qdrant
 
 clean-data:
 	rm -rf api/data
