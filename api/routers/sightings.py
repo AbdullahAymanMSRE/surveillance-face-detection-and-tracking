@@ -22,7 +22,7 @@ from sqlmodel import select
 
 from ..db import get_session, get_thumbnails_dir
 from ..gallery import get_gallery, match_create_lock
-from ..models import Camera, FaceEmbedding, Person, Sighting
+from ..models import Camera, Person, Sighting
 from ..serializers import person_response, sighting_response
 
 router = APIRouter()
@@ -37,8 +37,7 @@ EXEMPLAR_NOVELTY = 0.50      # only store a frame whose pose isn't already cover
 EXEMPLAR_MIN_SHARPNESS = 60.0  # never enroll a blurry crop as a reference
 
 
-def _maybe_add_exemplar(session: Session, person_id: int, emb_bytes: bytes,
-                        vec: np.ndarray, sharpness: float) -> None:
+def _maybe_add_exemplar(person_id: int, vec: np.ndarray, sharpness: float) -> None:
     """Store ``vec`` as a new pose exemplar for ``person_id`` when it is sharp,
     genuinely novel, and the per-person cap isn't reached."""
     if sharpness < EXEMPLAR_MIN_SHARPNESS:
@@ -48,8 +47,6 @@ def _maybe_add_exemplar(session: Session, person_id: int, emb_bytes: bytes,
         return
     if gallery.best_for_person(person_id, vec) >= EXEMPLAR_NOVELTY:
         return  # this pose is already well represented
-    session.add(FaceEmbedding(person_id=person_id, vector=emb_bytes))
-    session.commit()
     gallery.add(person_id, vec)
 
 
@@ -106,8 +103,6 @@ def open_sighting(
             session.commit()
             session.refresh(person)
             person_id = person.id
-            session.add(FaceEmbedding(person_id=person_id, vector=emb_bytes))
-            session.commit()
             gallery.add(person_id, vec)
             if crop_bytes:
                 thumb = crop_bytes
@@ -119,7 +114,7 @@ def open_sighting(
                 session.commit()
                 thumb = crop_bytes
             # Re-matched an existing identity: capture this pose if it's new.
-            _maybe_add_exemplar(session, person_id, emb_bytes, vec, sharpness)
+            _maybe_add_exemplar(person_id, vec, sharpness)
 
         sighting = Sighting(person_id=person_id, camera_id=camera_id,
                             best_sharpness=sharpness)
@@ -166,7 +161,7 @@ def heartbeat(
         emb_bytes = embedding.file.read()
         vec = np.frombuffer(emb_bytes, dtype=np.float32)
         if vec.size:
-            _maybe_add_exemplar(session, sighting.person_id, emb_bytes, vec, sharpness)
+            _maybe_add_exemplar(sighting.person_id, vec, sharpness)
     if thumb is not None:
         _save_thumbnail(*thumb)
     return {"ok": True}
