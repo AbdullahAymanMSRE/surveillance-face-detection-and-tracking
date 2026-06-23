@@ -4,7 +4,7 @@ from sqlmodel import Session, select
 from api import ml
 from api.db import get_engine
 from api.gallery import get_gallery
-from api.models import FaceEmbedding, Person
+from api.models import Person
 
 
 def _seed_person_from_image(image_bytes: bytes) -> int:
@@ -16,8 +16,6 @@ def _seed_person_from_image(image_bytes: bytes) -> int:
         s.add(person)
         s.commit()
         s.refresh(person)
-        s.add(FaceEmbedding(person_id=person.id, vector=vector_bytes))
-        s.commit()
         person_id = person.id
     get_gallery().add(person_id, np.frombuffer(vector_bytes, dtype=np.float32))
     return person_id
@@ -50,12 +48,13 @@ def test_search_finds_enrolled_person(client, face_known_1_bytes, face_known_2_b
 
 def test_search_does_not_write(client, face_known_1_bytes):
     _seed_person_from_image(face_known_1_bytes)
+    gallery = get_gallery()
     with Session(get_engine()) as s:
         persons_before = len(s.exec(select(Person)).all())
-        embeds_before = len(s.exec(select(FaceEmbedding)).all())
+    embeds_before = len(gallery)
 
     client.post("/search", files={"image": ("x.jpg", face_known_1_bytes, "image/jpeg")})
 
     with Session(get_engine()) as s:
         assert len(s.exec(select(Person)).all()) == persons_before
-        assert len(s.exec(select(FaceEmbedding)).all()) == embeds_before
+    assert len(gallery) == embeds_before

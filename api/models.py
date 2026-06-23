@@ -17,18 +17,6 @@ class Person(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
-class FaceEmbedding(SQLModel, table=True):
-    """One 512-d ArcFace embedding (float32, L2-normalized) for a person.
-
-    A person accumulates several of these; the in-memory gallery matches against
-    all of them and reports the owning person of the best-scoring row.
-    """
-    id: Optional[int] = Field(default=None, primary_key=True)
-    person_id: int = Field(foreign_key="person.id")
-    vector: bytes
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-
-
 class Camera(SQLModel, table=True):
     """A video source the server pulls and runs a recognition worker against.
 
