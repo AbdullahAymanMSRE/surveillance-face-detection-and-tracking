@@ -126,3 +126,21 @@ def test_sighting_response_includes_clip_fields():
     assert body["clipUrl"] == "/sightings/5/clip"
     s2 = Sighting(id=6, person_id=1, camera_id=1, has_clip=False)
     assert sighting_response(s2, None)["clipUrl"] is None
+
+
+def test_clip_upload_and_download(client):
+    cam_id = _make_camera()
+    resp = _open(client, cam_id, _emb(1))
+    sighting_id = resp.json()["sightingId"]
+
+    fake_mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64
+    up = client.post(f"/sightings/{sighting_id}/clip",
+                     files={"clip": ("v.mp4", fake_mp4, "video/mp4")})
+    assert up.status_code == 200
+
+    got = client.get(f"/sightings/{sighting_id}/clip")
+    assert got.status_code == 200
+    assert got.headers["content-type"] == "video/mp4"
+    assert got.content == fake_mp4
+
+    assert client.get("/sightings/999999/clip").status_code == 404
