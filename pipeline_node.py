@@ -114,6 +114,13 @@ def start_preview_server(state: PreviewState, port: int):
 def _open_capture(source: str) -> cv2.VideoCapture:
     if str(source).isdigit():
         return cv2.VideoCapture(int(source))
+    # RTSP over UDP often yields "couldn't read video stream" on real networks;
+    # force TCP (and a socket timeout) via the FFmpeg backend. The env var is read
+    # by OpenCV when the capture is created.
+    if str(source).lower().startswith(("rtsp://", "rtsps://")):
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+            "rtsp_transport;tcp|stimeout;10000000")
+        return cv2.VideoCapture(source, cv2.CAP_FFMPEG)
     return cv2.VideoCapture(source)
 
 
