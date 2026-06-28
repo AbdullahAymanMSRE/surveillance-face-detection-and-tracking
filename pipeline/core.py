@@ -304,7 +304,7 @@ class PipelineCore:
 
 
 def build_arcface_core(detector_path: str | Path = DEFAULT_DETECTOR,
-                       threshold: float = 0.28, *, conf: float = 0.5,
+                       threshold: float = 0.35, *, conf: float = 0.5,
                        imgsz: int = 320, refresh_secs: float = 4.0,
                        min_face: int = 90, min_sharpness: float = 60.0,
                        align: bool = True, require_landmarks: bool = True

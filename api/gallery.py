@@ -13,7 +13,10 @@ from typing import Dict, Optional, Protocol, Tuple
 import numpy as np
 from qdrant_client import QdrantClient, models
 
-DEFAULT_THRESHOLD = 0.28
+# Re-calibrated 2026-06-27 for the ArcFace fine-tune of w600k_mbf.onnx: the
+# fine-tuned model's same/different-identity cosine gap widened from
+# ~0.39/0.22 (orig) to ~0.58/0.00, so the match threshold moved up with it.
+DEFAULT_THRESHOLD = 0.35
 
 
 def _normalize(vec: np.ndarray) -> np.ndarray:

@@ -23,11 +23,12 @@ from .db import get_thumbnails_dir
 from .gallery import get_gallery
 from .models import Person, Sighting
 
-# Cosine at/above which two identities are judged the same face. Sits in the
-# empirical gap between different people (cross-identity ArcFace cosine ~0.05-0.1)
-# and the same person across pose (frontal-vs-profile ~0.40), above the live
-# match threshold (0.28) so merging stays more conservative than live matching.
-MERGE_THRESHOLD = 0.35
+# Cosine at/above which two identities are judged the same face. Re-calibrated
+# 2026-06-27 alongside the ArcFace fine-tune: the fine-tuned model widened the
+# same/different-identity gap (~0.58/0.00 vs ~0.39/0.22 before), so this moved
+# up with the live match threshold (0.35) so merging stays more conservative
+# than live matching.
+MERGE_THRESHOLD = 0.50
 
 
 def _max_cross_similarity(a: np.ndarray, b: np.ndarray) -> float:
