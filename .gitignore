@@ -24,3 +24,6 @@ demo/*.mp4
 
 # Scratch
 *.zip
+
+# macOS Finder metadata
+.DS_Store

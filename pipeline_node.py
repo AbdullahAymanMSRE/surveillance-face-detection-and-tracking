@@ -169,6 +169,7 @@ def main() -> int:
     p.add_argument("--conf", type=float, default=0.5)
     p.add_argument("--refresh-secs", type=float, default=4.0)
     p.add_argument("--min-face", type=int, default=90)
+    p.add_argument("--min-sharpness", type=float, default=60.0)
     p.add_argument("--max-seconds", type=float, default=0.0,
                    help="Stop after N seconds (0 = run forever; for testing)")
     args = p.parse_args()
@@ -184,13 +185,19 @@ def main() -> int:
 
     core, _recognizer = build_arcface_core(
         threshold=args.threshold, conf=args.conf, imgsz=args.imgsz,
-        refresh_secs=args.refresh_secs, min_face=args.min_face)
+        refresh_secs=args.refresh_secs, min_face=args.min_face,
+        min_sharpness=args.min_sharpness)
     core.start()
 
     cap = _open_capture(source)
     if not cap.isOpened():
         print(f"[node] could not open source: {source}", flush=True)
         return 2
+
+    # Pace file playback to the clip's native FPS so a video stands in for a
+    # live camera at real-time speed (live streams already arrive in real time).
+    src_fps = cap.get(cv2.CAP_PROP_FPS) if is_file else 0.0
+    frame_period = 1.0 / src_fps if (is_file and src_fps and src_fps > 0) else 0.0
 
     preview = PreviewState()
     if args.preview_port:
@@ -256,6 +263,7 @@ def main() -> int:
     print("[node] running", flush=True)
     try:
         while True:
+            loop_start = time.time()
             ok, frame = cap.read()
             if not ok or frame is None:
                 if is_file:
@@ -304,6 +312,12 @@ def main() -> int:
 
             if args.max_seconds and (now - started) > args.max_seconds:
                 break
+
+            # Throttle file playback to real time (no-op for live streams).
+            if frame_period:
+                spare = frame_period - (time.time() - loop_start)
+                if spare > 0:
+                    time.sleep(spare)
     except KeyboardInterrupt:
         print("[node] received stop signal; flushing clips", flush=True)
     finally:

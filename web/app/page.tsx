@@ -8,6 +8,24 @@ import { CornerBrackets } from "@/components/CornerBrackets";
 
 type Group = { cameraId: number; cameraName: string; location: string; rows: ActiveSighting[] };
 
+function dedupeByPerson(rows: ActiveSighting[]): ActiveSighting[] {
+  // A person whose track fragments can have several open sightings at once.
+  // Show one card per identity (the earliest sighting). Not-yet-recognized
+  // sightings have no person, so keep each of those.
+  const sorted = [...rows].sort((a, b) =>
+    (a.startedAt ?? "").localeCompare(b.startedAt ?? ""));
+  const seen = new Set<number>();
+  const out: ActiveSighting[] = [];
+  for (const r of sorted) {
+    if (r.person) {
+      if (seen.has(r.person.id)) continue;
+      seen.add(r.person.id);
+    }
+    out.push(r);
+  }
+  return out;
+}
+
 function groupByCamera(rows: ActiveSighting[]): Group[] {
   const map = new Map<number, Group>();
   for (const r of rows) {
@@ -20,12 +38,18 @@ function groupByCamera(rows: ActiveSighting[]): Group[] {
     g.rows.push(r);
     map.set(r.cameraId, g);
   }
+  for (const g of map.values()) g.rows = dedupeByPerson(g.rows);
   return [...map.values()];
 }
 
 export default function LivePage() {
   const { data, error } = usePoll(listActiveSightings, 1500);
   const groups = data ? groupByCamera(data) : [];
+  // Count unique identities (a person seen on two cameras counts once); each
+  // not-yet-recognized sighting counts on its own.
+  const visibleCount = data
+    ? new Set(data.map((r) => (r.person ? `p${r.person.id}` : `s${r.id}`))).size
+    : 0;
 
   return (
     <main className="mx-auto w-full max-w-6xl px-6 py-10 sm:px-10">
@@ -33,7 +57,7 @@ export default function LivePage() {
         <p className="mb-1 text-xs tracking-[0.3em] text-faint">LIVE // CURRENTLY IN VIEW</p>
         <h1 className="font-display text-4xl font-bold tracking-wide text-ink">LIVE FEED</h1>
         <p className="mt-2 text-xs text-faint">
-          {data ? `${data.length} person(s) currently visible across ${groups.length} camera(s)` : "Connecting…"}
+          {data ? `${visibleCount} person(s) currently visible across ${groups.length} camera(s)` : "Connecting…"}
         </p>
       </header>
 

@@ -57,6 +57,20 @@ class Supervisor:
                     "--camera-id", str(camera_id),
                     "--api-url", self.api_url,
                     "--preview-port", str(port)]
+            # Optional detector overrides (e.g. larger imgsz / lower conf for
+            # small or high-angle faces). Unset -> pipeline_node.py defaults.
+            det_imgsz = os.environ.get("FACE_DET_IMGSZ")
+            det_conf = os.environ.get("FACE_DET_CONF")
+            det_min_face = os.environ.get("FACE_DET_MIN_FACE")
+            det_min_sharp = os.environ.get("FACE_DET_MIN_SHARPNESS")
+            if det_imgsz:
+                args += ["--imgsz", det_imgsz]
+            if det_conf:
+                args += ["--conf", det_conf]
+            if det_min_face:
+                args += ["--min-face", det_min_face]
+            if det_min_sharp:
+                args += ["--min-sharpness", det_min_sharp]
             self._procs[camera_id] = subprocess.Popen(args)
 
     def stop_camera(self, camera_id: int) -> None:
