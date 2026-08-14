@@ -27,5 +27,4 @@ demo/*.mp4
 
 # macOS Finder metadata
 .DS_Store
-config.bat
 node_modules
